@@ -1,0 +1,89 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cexy"
+version = "0.1.0.dev0"
+description = "Python SDK for the CEXY.io exchange REST and WebSocket API"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "CEXY.io" }]
+requires-python = ">=3.9"
+dependencies = [
+  "httpx>=0.25,<1",
+  "pydantic>=2.5,<3",
+  "websockets>=13,<17",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Office/Business :: Financial",
+  "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://cexy.io"
+Source = "https://github.com/cexyio/cexy-python"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.23",
+  "respx>=0.21",
+  "ruff==0.16.9",
+  "mypy>=1.10",
+  "pyyaml>=6",
+]
+# Generator pins: CI's drift check reruns scripts/generate.sh with exactly these.
+codegen = [
+  "datamodel-code-generator==0.83.0",
+  "ruff==0.16.9",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["cexy"]
+
+[tool.hatch.build.targets.sdist]
+include = ["cexy", "README.md", "LICENSE", "CHANGELOG.md", "SECURITY.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = ["live: opt-in tests against the public api.cexy.io (set CEXY_LIVE_TESTS=1)"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+extend-exclude = ["cexy/_generated", "*.md", "tools/scan_internal.py"]  # scanner: verbatim copy from cexy-api-spec
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF"]
+ignore = ["UP006", "UP007", "UP035", "UP045", "RUF022", "SIM105", "UP031"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S311", "B017"]
+"examples/**" = ["S105", "S106", "T201"]
+"scripts/**" = ["S603", "S607"]
+"tools/**" = ["S603", "S607", "E501"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+packages = ["cexy"]
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = "cexy._generated.*"
+ignore_errors = true
+
+[tool.ruff.lint.isort]
+known-first-party = ["cexy"]

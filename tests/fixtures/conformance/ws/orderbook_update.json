@@ -1,0 +1,22 @@
+{
+  "type": "orderbook.update",
+  "channel": "orderbook:BTC/USDT",
+  "sequence": 1042,
+  "timestamp": "2026-09-10T11:42:31.123Z",
+  "data": {
+    "symbol": "BTC/USDT",
+    "full": true,
+    "bids": [
+      [
+        "61000.10",
+        "0.25"
+      ]
+    ],
+    "asks": [
+      [
+        "61001.00",
+        "0.10"
+      ]
+    ]
+  }
+}

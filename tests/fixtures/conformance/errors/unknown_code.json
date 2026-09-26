@@ -1,0 +1,15 @@
+{
+  "status": 400,
+  "body": {
+    "error": {
+      "code": "SOME_FUTURE_CODE",
+      "message": "New code",
+      "retryable": false
+    }
+  },
+  "expect": {
+    "error_class": "CexyApiError",
+    "error_code": "SOME_FUTURE_CODE",
+    "must_not_crash": true
+  }
+}

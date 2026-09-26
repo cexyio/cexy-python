@@ -1,0 +1,4 @@
+tests/fixtures/conformance/ is a vendored copy of conformance/ from the cexy-api-spec
+repository (github.com/cexyio/cexy-api-spec). Do not edit it here: change it upstream, then
+run `scripts/sync_spec.sh` (which also refreshes spec/). CI runs
+`scripts/sync_spec.sh <checkout> --check` to catch drift.

@@ -1,0 +1,168 @@
+# CEXY.io WebSocket API. DERIVED from the public WebSocket documentation, pending an official
+# AsyncAPI export from the exchange. Payload schemas refer to spec/openapi.sdk.json.
+asyncapi: 3.0.0
+info:
+  title: CEXY.io WebSocket API
+  version: "1"
+  description: |
+    One multiplexed connection carries every subscription.
+
+    Client rules (all are required for a correct client):
+    - Send `{"op":"ping"}` at least every 30 s. Only client frames reset the server's idle
+      timer; an idle connection is closed after 90 s (checked every 30 s, so 90-120 s).
+    - Accept unsolicited `{"type":"pong"}` frames (no id) every 30 s.
+    - Order books: subscribe first, then GET /api/v1/markets/{symbol}/orderbook (sequence S),
+      drop updates with sequence <= S; every update replaces the top 50 levels in full.
+      A sequence gap marks the book stale until the next update. Sequences reset when the
+      server restarts: take a fresh snapshot after every reconnect. Never merge REST levels
+      deeper than 50 into WebSocket state.
+    - `CONCURRENT_MODIFICATION` error frames (null id, no channel) mean messages were
+      dropped: resynchronise all books and channels.
+    - Limits: 240 client messages per minute (fixed window, pings count; exceeding it closes
+      the socket), 100 subscriptions (extra channels in a batch are refused without closing),
+      64 KiB per message, channel names up to 64 characters, text frames only.
+    - Subscriptions are not restored after a reconnect: re-authenticate, re-subscribe and
+      resynchronise. Use exponential backoff with jitter.
+    - Private channels need `auth` with a session access token. API-key authentication on
+      the WebSocket is planned (after request signing).
+    - Every client request that carries an `id` is acknowledged with that `id`:
+      `authenticated`, `subscribed`, `unsubscribed`, `pong` or `error`.
+  license:
+    name: MIT
+servers:
+  production:
+    host: api.cexy.io
+    pathname: /api/v1/ws
+    protocol: wss
+channels:
+  connection:
+    address: /api/v1/ws
+    messages:
+      welcome: {$ref: "#/components/messages/Welcome"}
+      auth: {$ref: "#/components/messages/Auth"}
+      subscribe: {$ref: "#/components/messages/Subscribe"}
+      unsubscribe: {$ref: "#/components/messages/Unsubscribe"}
+      ping: {$ref: "#/components/messages/Ping"}
+      pong: {$ref: "#/components/messages/Pong"}
+      subscribed: {$ref: "#/components/messages/Subscribed"}
+      unsubscribed: {$ref: "#/components/messages/Unsubscribed"}
+      authenticated: {$ref: "#/components/messages/Authenticated"}
+      error: {$ref: "#/components/messages/Error"}
+      event: {$ref: "#/components/messages/Event"}
+operations:
+  receiveWelcome: {action: receive, channel: {$ref: "#/channels/connection"}, messages: [{$ref: "#/channels/connection/messages/welcome"}]}
+  sendAuth: {action: send, channel: {$ref: "#/channels/connection"}, messages: [{$ref: "#/channels/connection/messages/auth"}]}
+  sendSubscribe: {action: send, channel: {$ref: "#/channels/connection"}, messages: [{$ref: "#/channels/connection/messages/subscribe"}]}
+  sendUnsubscribe: {action: send, channel: {$ref: "#/channels/connection"}, messages: [{$ref: "#/channels/connection/messages/unsubscribe"}]}
+  sendPing: {action: send, channel: {$ref: "#/channels/connection"}, messages: [{$ref: "#/channels/connection/messages/ping"}]}
+  receiveControl:
+    action: receive
+    channel: {$ref: "#/channels/connection"}
+    messages:
+      - {$ref: "#/channels/connection/messages/pong"}
+      - {$ref: "#/channels/connection/messages/subscribed"}
+      - {$ref: "#/channels/connection/messages/unsubscribed"}
+      - {$ref: "#/channels/connection/messages/authenticated"}
+      - {$ref: "#/channels/connection/messages/error"}
+  receiveEvents: {action: receive, channel: {$ref: "#/channels/connection"}, messages: [{$ref: "#/channels/connection/messages/event"}]}
+components:
+  messages:
+    Welcome:
+      payload:
+        type: object
+        required: [type, protocol_version, heartbeat_interval_seconds, max_subscriptions, connection_id]
+        properties:
+          type: {const: welcome}
+          protocol_version: {type: integer, description: "Increments only on breaking changes; warn on unknown values and continue."}
+          heartbeat_interval_seconds: {type: integer, description: "The server's pong cadence (30), not a client deadline."}
+          max_subscriptions: {type: integer}
+          connection_id: {type: string}
+    Auth:
+      payload:
+        type: object
+        required: [op, token]
+        properties:
+          op: {const: auth}
+          token: {type: string, description: "Session access token. Never put credentials in the URL."}
+          id: {type: string}
+    Subscribe:
+      payload:
+        type: object
+        required: [op, channels]
+        properties:
+          op: {const: subscribe}
+          channels:
+            type: array
+            items: {$ref: "#/components/schemas/Channel"}
+          id: {type: string}
+    Unsubscribe:
+      payload:
+        type: object
+        required: [op, channels]
+        properties:
+          op: {const: unsubscribe}
+          channels: {type: array, items: {$ref: "#/components/schemas/Channel"}}
+          id: {type: string}
+    Ping:
+      payload: {type: object, required: [op], properties: {op: {const: ping}, id: {type: string}}}
+    Pong:
+      description: Reply to a client ping (echoes its id), or an unsolicited server pong every 30 s (no id).
+      payload: {type: object, required: [type], properties: {type: {const: pong}, id: {type: [string, "null"]}}}
+    Authenticated:
+      description: Acknowledges a successful `auth` request; echoes its id.
+      payload:
+        type: object
+        required: [type]
+        properties:
+          type: {const: authenticated}
+          id: {type: [string, "null"]}
+          user_id: {type: string}
+    Unsubscribed:
+      payload:
+        type: object
+        properties:
+          type: {const: unsubscribed}
+          channels: {type: array, items: {type: string}}
+          id: {type: [string, "null"]}
+    Subscribed:
+      description: Sent only when at least one channel was added; echoes the request id.
+      payload:
+        type: object
+        properties:
+          type: {const: subscribed}
+          channels: {type: array, items: {type: string}}
+          id: {type: [string, "null"]}
+    Error:
+      payload:
+        type: object
+        required: [type, code]
+        properties:
+          type: {const: error}
+          code: {type: string, description: "Same vocabulary as REST error.code (errors.yaml). Echoes the request id when caused by a request; CONCURRENT_MODIFICATION has a null id."}
+          message: {type: string}
+          id: {type: [string, "null"]}
+    Event:
+      payload:
+        type: object
+        required: [type, channel, data]
+        properties:
+          type:
+            type: string
+            enum: [ticker.update, orderbook.update, trade.new, market.status, order.created, order.updated,
+                   order.cancelled, order.filled, balance.updated, deposit.detected, deposit.updated,
+                   deposit.completed, withdrawal.updated, session.revoked]
+            description: Ignore unknown event types (additive changes do not bump protocol_version).
+          channel: {type: string}
+          sequence: {type: integer, description: "Per channel; +1 per update; resets on server restart."}
+          timestamp: {type: string, format: date-time}
+          data: {type: object, description: "Amounts are decimal strings. orderbook.update data is {symbol, full: true, bids, asks}: always the complete top 50 of both sides, replacing the previous state (there are no deltas)."}
+  schemas:
+    Channel:
+      type: string
+      maxLength: 64
+      description: |
+        Public: ticker, ticker:{market}, orderbook:{market}, trades:{market}, markets.
+        Private (auth required): orders, balances, deposits, withdrawals, account.
+        `account` carries only session.revoked: treat it as "authentication lost"; the server
+        does not close the socket.
+      examples: ["ticker:BTC/USDT", "orderbook:BTC/USDT", "orders"]

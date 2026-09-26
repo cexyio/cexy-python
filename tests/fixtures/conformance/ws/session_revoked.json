@@ -1,0 +1,9 @@
+{
+  "type": "session.revoked",
+  "channel": "account",
+  "data": {
+    "session_id": null,
+    "reason": "logout_all",
+    "current": true
+  }
+}

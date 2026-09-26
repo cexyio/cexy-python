@@ -1,0 +1,6 @@
+{
+  "type": "error",
+  "code": "CONCURRENT_MODIFICATION",
+  "message": "12 messages dropped",
+  "id": null
+}

@@ -1,0 +1,23 @@
+{
+  "status": 422,
+  "body": {
+    "error": {
+      "code": "INSUFFICIENT_FUNDS",
+      "message": "Not enough available balance",
+      "details": {
+        "required": "1.5",
+        "available": "1.2"
+      },
+      "request_id": "req_test_2",
+      "retryable": false
+    }
+  },
+  "expect": {
+    "retry": false,
+    "error_code": "INSUFFICIENT_FUNDS",
+    "details": {
+      "required": "1.5",
+      "available": "1.2"
+    }
+  }
+}

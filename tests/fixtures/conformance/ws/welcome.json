@@ -1,0 +1,7 @@
+{
+  "type": "welcome",
+  "protocol_version": 1,
+  "heartbeat_interval_seconds": 30,
+  "max_subscriptions": 100,
+  "connection_id": "a1b2c3d4"
+}

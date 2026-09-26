@@ -1,0 +1,17 @@
+{
+  "status": 409,
+  "body": {
+    "error": {
+      "code": "CONCURRENT_MODIFICATION",
+      "message": "A request with this Idempotency-Key is in progress",
+      "details": {
+        "retry_after_seconds": 2
+      },
+      "retryable": true
+    }
+  },
+  "expect": {
+    "retry": true,
+    "same_idempotency_key": true
+  }
+}

@@ -1,0 +1,4396 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "CEXY API",
+    "description": "REST API for a cryptocurrency exchange.\n\n## Conventions\n\n**Amounts are strings.** Every monetary value is a decimal string such as `\"1.50000000\"`,\nnever a JSON number. A JSON number is parsed into an IEEE-754 double by most clients,\nwhich cannot represent `0.1` exactly \u2014 so a number would silently corrupt balances.\nParse them with a decimal library, not a float.\n\n**Errors have machine-readable codes.** Every failure returns\n`{\"error\": {\"code\", \"message\", \"details\", \"request_id\", \"retryable\"}}`. Branch on\n`code`, never on `message`, which may change. `retryable` says whether an identical\nretry could succeed.\n\n**Two-factor is mandatory.** Registration cannot complete without enrolling an\nauthenticator, and a correct password alone never returns a session. Sensitive actions\nadditionally require a *recently* verified code \u2014 call\n`POST /account/security/two-factor/verify` to refresh the window.\n\n**Pagination.** Histories use opaque cursors: pass `next_cursor` back as `cursor`. They\ncarry no `total`, because counting an ever-growing collection on every page is a full\nscan and the number is stale before it renders. Catalogues use offsets and do include a\ntotal.\n\n**Idempotency.** Send an `Idempotency-Key` header on any financial mutation. A retry with\nthe same key and body replays the original response; the same key with a *different* body\nis rejected with `IDEMPOTENCY_KEY_CONFLICT`.\n\n**Rate limits.** Responses carry `X-RateLimit-Limit`, `X-RateLimit-Remaining` and\n`X-RateLimit-Reset`. A `429` includes `Retry-After`.",
+    "license": {
+      "name": "MIT",
+      "url": "https://opensource.org/license/mit"
+    },
+    "version": "1.0.0"
+  },
+  "tags": [
+    {
+      "name": "public",
+      "description": "Market data and configuration. No authentication."
+    },
+    {
+      "name": "auth",
+      "description": "Registration and sign-in. Two-factor is mandatory."
+    },
+    {
+      "name": "account",
+      "description": "Profile, balances, ledger and security settings."
+    },
+    {
+      "name": "trading",
+      "description": "Placing, cancelling and reviewing orders."
+    },
+    {
+      "name": "wallet",
+      "description": "Deposits, withdrawals and the address book."
+    },
+    {
+      "name": "exports",
+      "description": "Bounded CSV exports of account history."
+    },
+    {
+      "name": "aggregators",
+      "description": "Market data in the formats CoinMarketCap and CoinGecko ingest. These follow the aggregators' conventions rather than this API's \u2014 notably, CoinMarketCap's feed sends JSON numbers where the rest of the API sends decimal strings."
+    },
+    {
+      "name": "udf",
+      "description": "A TradingView UDF datafeed. Point the charting library at /api/v1/udf. Like the aggregator feeds, this follows TradingView's conventions rather than this API's: OHLCV arrives as parallel arrays of JSON numbers, and `s` is a status string rather than an HTTP code."
+    },
+    {
+      "name": "health",
+      "description": "Liveness and readiness probes."
+    }
+  ],
+  "servers": [
+    {
+      "url": "https://api.cexy.io",
+      "description": "CEXY.io production"
+    }
+  ],
+  "paths": {
+    "/api/v1/account/api-keys": {
+      "get": {
+        "tags": [
+          "account"
+        ],
+        "summary": "The account's API keys.",
+        "operationId": "list_api_keys",
+        "responses": {
+          "200": {
+            "description": "The account's keys, without secrets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ApiKeyResponse"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      }
+    },
+    "/api/v1/account/balances": {
+      "get": {
+        "tags": [
+          "account"
+        ],
+        "summary": "Balances across every asset the account holds.",
+        "description": "Zero balances are omitted; ask for one by symbol to see it explicitly.",
+        "operationId": "list_balances",
+        "responses": {
+          "200": {
+            "description": "Balances",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/BalanceResponse"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      }
+    },
+    "/api/v1/account/balances/{asset}": {
+      "get": {
+        "tags": [
+          "account"
+        ],
+        "summary": "One asset's balance, including a zero one.",
+        "operationId": "get_balance",
+        "parameters": [
+          {
+            "name": "asset",
+            "in": "path",
+            "description": "Asset symbol",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "BTC"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The balance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/BalanceResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such asset"
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      }
+    },
+    "/api/v1/account/ledger": {
+      "get": {
+        "tags": [
+          "account"
+        ],
+        "summary": "The account's ledger \u2014 every balance change, with its cause.",
+        "operationId": "get_ledger",
+        "parameters": [
+          {
+            "name": "asset",
+            "in": "query",
+            "description": "Limit to one asset.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous response's `next_cursor`. Omit for the first page.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum items to return. Clamped to `MAX_LIMIT`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "nullable": true,
+              "maximum": 500,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "description": "Sort direction. Defaults to newest-first.",
+            "required": false,
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/SortDirection"
+                }
+              ],
+              "nullable": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ledger entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items",
+                    "has_more"
+                  ],
+                  "properties": {
+                    "has_more": {
+                      "type": "boolean",
+                      "description": "Whether another page exists. Equivalent to `next_cursor` being present."
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/LedgerEntryResponse"
+                      },
+                      "description": "The page of items, in the requested direction."
+                    },
+                    "next_cursor": {
+                      "type": "string",
+                      "description": "Opaque cursor for the next page; pass it back as `cursor`. Omitted on the last page."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      }
+    },
+    "/api/v1/account/notifications": {
+      "get": {
+        "tags": [
+          "account"
+        ],
+        "summary": "The account's notices, newest first.",
+        "operationId": "list_notifications",
+        "parameters": [
+          {
+            "name": "unread_only",
+            "in": "query",
+            "description": "Return only notices that have not been read.",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "nullable": true
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous response's `next_cursor`. Omit for the first page.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum items to return. Clamped to `MAX_LIMIT`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "nullable": true,
+              "maximum": 500,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "description": "Sort direction. Defaults to newest-first.",
+            "required": false,
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/SortDirection"
+                }
+              ],
+              "nullable": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Notices, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items",
+                    "has_more"
+                  ],
+                  "properties": {
+                    "has_more": {
+                      "type": "boolean",
+                      "description": "Whether another page exists. Equivalent to `next_cursor` being present."
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/NotificationResponse"
+                      },
+                      "description": "The page of items, in the requested direction."
+                    },
+                    "next_cursor": {
+                      "type": "string",
+                      "description": "Opaque cursor for the next page; pass it back as `cursor`. Omitted on the last page."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      }
+    },
+    "/api/v1/account/sub-accounts": {
+      "get": {
+        "tags": [
+          "account"
+        ],
+        "summary": "This account's sub-accounts.",
+        "operationId": "list_sub_accounts",
+        "responses": {
+          "200": {
+            "description": "Sub-accounts, oldest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SubAccountResponse"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      }
+    },
+    "/api/v1/assets": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Every listed asset, with its networks.",
+        "operationId": "list_assets",
+        "responses": {
+          "200": {
+            "description": "Listed assets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AssetResponse"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-required-scope": "-",
+        "security": []
+      }
+    },
+    "/api/v1/assets/{symbol}": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "One asset and its networks.",
+        "operationId": "get_asset",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "path",
+            "description": "Asset symbol",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "BTC"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The asset",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AssetResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such asset"
+          }
+        },
+        "x-required-scope": "-",
+        "security": []
+      }
+    },
+    "/api/v1/config": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Public exchange configuration.",
+        "description": "Everything a frontend needs to render itself: branding, limits, supported intervals and maintenance state.",
+        "operationId": "exchange_config",
+        "responses": {
+          "200": {
+            "description": "Exchange configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ExchangeConfigResponse"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-required-scope": "-",
+        "security": []
+      }
+    },
+    "/api/v1/exports/deposits": {
+      "get": {
+        "tags": [
+          "exports"
+        ],
+        "summary": "Exports the caller's deposits as CSV.",
+        "operationId": "export_deposits",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Start of the period, inclusive. Defaults to 30 days ago.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "nullable": true
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "End of the period, inclusive. Defaults to now.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "nullable": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CSV of deposits"
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      }
+    },
+    "/api/v1/exports/ledger": {
+      "get": {
+        "tags": [
+          "exports"
+        ],
+        "summary": "Exports the caller's ledger as CSV.",
+        "description": "The complete accounting record: every balance change with its cause.",
+        "operationId": "export_ledger",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Start of the period, inclusive. Defaults to 30 days ago.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "nullable": true
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "End of the period, inclusive. Defaults to now.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "nullable": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CSV of ledger entries"
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      }
+    },
+    "/api/v1/exports/orders": {
+      "get": {
+        "tags": [
+          "exports"
+        ],
+        "summary": "Exports the caller's orders as CSV.",
+        "operationId": "export_orders",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Start of the period, inclusive. Defaults to 30 days ago.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "nullable": true
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "End of the period, inclusive. Defaults to now.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "nullable": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CSV of orders"
+          },
+          "400": {
+            "description": "The date range is invalid or too wide"
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      }
+    },
+    "/api/v1/exports/trades": {
+      "get": {
+        "tags": [
+          "exports"
+        ],
+        "summary": "Exports the caller's trades as CSV.",
+        "operationId": "export_trades",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Start of the period, inclusive. Defaults to 30 days ago.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "nullable": true
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "End of the period, inclusive. Defaults to now.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "nullable": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CSV of executed trades"
+          },
+          "400": {
+            "description": "The date range is invalid or too wide"
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      }
+    },
+    "/api/v1/exports/withdrawals": {
+      "get": {
+        "tags": [
+          "exports"
+        ],
+        "summary": "Exports the caller's withdrawals as CSV.",
+        "operationId": "export_withdrawals",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Start of the period, inclusive. Defaults to 30 days ago.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "nullable": true
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "End of the period, inclusive. Defaults to now.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "nullable": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CSV of withdrawals"
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      }
+    },
+    "/api/v1/fees": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "The fee schedule.",
+        "operationId": "list_fee_schedules",
+        "responses": {
+          "200": {
+            "description": "Fee tiers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/FeeScheduleResponse"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-required-scope": "-",
+        "security": []
+      }
+    },
+    "/api/v1/markets": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Every visible market with its ticker.",
+        "operationId": "list_markets",
+        "responses": {
+          "200": {
+            "description": "Markets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/MarketResponse"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-required-scope": "-",
+        "security": []
+      }
+    },
+    "/api/v1/markets/{symbol}": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "One market.",
+        "operationId": "get_market",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "path",
+            "description": "Market symbol",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "BTC/USDT"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The market",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/MarketResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such market"
+          }
+        },
+        "x-required-scope": "-",
+        "security": []
+      }
+    },
+    "/api/v1/markets/{symbol}/candles": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "OHLCV candles.",
+        "operationId": "get_candles",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "path",
+            "description": "Market symbol",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "BTC/USDT"
+          },
+          {
+            "name": "interval",
+            "in": "query",
+            "description": "Bucket width.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/CandleInterval"
+            }
+          },
+          {
+            "name": "start_time",
+            "in": "query",
+            "description": "Earliest bucket to return.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "nullable": true
+            }
+          },
+          {
+            "name": "end_time",
+            "in": "query",
+            "description": "Latest bucket to return.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "nullable": true
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum buckets. Capped server-side.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 500,
+              "nullable": true,
+              "maximum": 1000,
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Candles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/CandleResponse"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such market"
+          }
+        },
+        "x-required-scope": "-",
+        "security": []
+      }
+    },
+    "/api/v1/markets/{symbol}/orderbook": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Aggregated order book.",
+        "operationId": "get_order_book",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "path",
+            "description": "Market symbol",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "BTC/USDT"
+          },
+          {
+            "name": "depth",
+            "in": "query",
+            "description": "Price levels per side. Capped server-side.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "nullable": true,
+              "maximum": 500,
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Order book",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/OrderBookResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such market"
+          }
+        },
+        "x-required-scope": "-",
+        "security": []
+      }
+    },
+    "/api/v1/markets/{symbol}/trades": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "A market's recent trades.",
+        "operationId": "get_market_trades",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "path",
+            "description": "Market symbol",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "BTC/USDT"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous response's `next_cursor`. Omit for the first page.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum items to return. Clamped to `MAX_LIMIT`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "nullable": true,
+              "maximum": 500,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "description": "Sort direction. Defaults to newest-first.",
+            "required": false,
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/SortDirection"
+                }
+              ],
+              "nullable": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent trades",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items",
+                    "has_more"
+                  ],
+                  "properties": {
+                    "has_more": {
+                      "type": "boolean",
+                      "description": "Whether another page exists. Equivalent to `next_cursor` being present."
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PublicTradeResponse"
+                      },
+                      "description": "The page of items, in the requested direction."
+                    },
+                    "next_cursor": {
+                      "type": "string",
+                      "description": "Opaque cursor for the next page; pass it back as `cursor`. Omitted on the last page."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such market"
+          }
+        },
+        "x-required-scope": "-",
+        "security": []
+      }
+    },
+    "/api/v1/networks": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Every configured network.",
+        "operationId": "list_networks",
+        "responses": {
+          "200": {
+            "description": "Networks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/NetworkResponse"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-required-scope": "-",
+        "security": []
+      }
+    },
+    "/api/v1/pools": {
+      "get": {
+        "tags": [
+          "pools"
+        ],
+        "summary": "Every pool and what it holds.",
+        "operationId": "list_pools",
+        "responses": {
+          "200": {
+            "description": "Liquidity pools",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PoolResponse"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-required-scope": "-",
+        "security": []
+      }
+    },
+    "/api/v1/pools/{symbol}": {
+      "get": {
+        "tags": [
+          "pools"
+        ],
+        "summary": "One market's pool.",
+        "operationId": "get_pool",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "path",
+            "description": "Market symbol",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "BTC/USDT"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The pool",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/PoolResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No pool for that market"
+          }
+        },
+        "x-required-scope": "-",
+        "security": []
+      }
+    },
+    "/api/v1/pools/{symbol}/exit": {
+      "post": {
+        "tags": [
+          "pools"
+        ],
+        "summary": "Removes liquidity.",
+        "description": "Shares are burned and a proportional slice of both assets is returned.",
+        "operationId": "exit_pool",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "path",
+            "description": "Market symbol",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "BTC/USDT"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Makes a retry safe",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExitPoolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Liquidity removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ExitPoolResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "More shares than the account holds"
+          },
+          "404": {
+            "description": "No pool, or no position in it"
+          },
+          "409": {
+            "description": "The idempotency key was reused with a different body"
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "trade"
+      }
+    },
+    "/api/v1/pools/{symbol}/join": {
+      "post": {
+        "tags": [
+          "pools"
+        ],
+        "summary": "Adds liquidity.",
+        "description": "Both assets are taken, in the ratio the pool already holds \u2014 only the quote that ratio requires is debited, however much is offered. The first join into an empty pool sets the price, and is refused if it strays far from the market's last traded price.\n\nSend `Idempotency-Key` so a timed-out request can be retried without adding liquidity twice.",
+        "operationId": "join_pool",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "path",
+            "description": "Market symbol",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "BTC/USDT"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Makes a retry safe",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JoinPoolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Liquidity added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/JoinPoolResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The amounts or the implied price were refused"
+          },
+          "404": {
+            "description": "No pool for that market"
+          },
+          "409": {
+            "description": "The idempotency key was reused with a different body"
+          },
+          "422": {
+            "description": "Insufficient funds"
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "trade"
+      }
+    },
+    "/api/v1/time": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "summary": "Server time, so a client can detect clock skew before it breaks two-factor.",
+        "operationId": "server_time",
+        "responses": {
+          "200": {
+            "description": "Server time",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ServerTimeResponse"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-required-scope": "-",
+        "security": []
+      }
+    },
+    "/api/v1/trading/orders": {
+      "get": {
+        "tags": [
+          "trading"
+        ],
+        "summary": "Open orders, newest first.",
+        "operationId": "list_open_orders",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "description": "Limit to one market.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Limit to one status.",
+            "required": false,
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/OrderStatus"
+                }
+              ],
+              "nullable": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Open orders",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/OrderResponse"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      },
+      "post": {
+        "tags": [
+          "trading"
+        ],
+        "summary": "Places an order.",
+        "description": "Funds are reserved before the order reaches the book, so a matched order can never be unfunded. On a buy the reservation covers the value plus the **taker** fee, which is the worst case; a maker fill releases the difference.\n\nSet `client_order_id` to make a retry safe (a repeated id is refused before funds move). `Idempotency-Key` has no effect on this endpoint.",
+        "operationId": "place_order",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaceOrderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Order accepted, with any immediate fills",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/PlaceOrderResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The order failed validation"
+          },
+          "409": {
+            "description": "That client order id is already in use"
+          },
+          "422": {
+            "description": "Insufficient funds, or the market is unavailable"
+          },
+          "503": {
+            "description": "The market is saturated; retry shortly"
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "trade"
+      }
+    },
+    "/api/v1/trading/orders/by-client-id/{client_order_id}": {
+      "get": {
+        "tags": [
+          "trading"
+        ],
+        "summary": "One order, looked up by the id the client supplied.",
+        "operationId": "get_order_by_client_id",
+        "parameters": [
+          {
+            "name": "client_order_id",
+            "in": "path",
+            "description": "Your identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/OrderResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such order on this account"
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      }
+    },
+    "/api/v1/trading/orders/cancel-all": {
+      "post": {
+        "tags": [
+          "trading"
+        ],
+        "summary": "Cancels every open order, optionally within one market.",
+        "description": "Best-effort: a failure on one order does not stop the rest, and both outcomes are reported. A panic-button endpoint that stops at the first problem is worse than useless.",
+        "operationId": "cancel_all",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelAllRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What was cancelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/CancelAllResponse"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "trade"
+      }
+    },
+    "/api/v1/trading/orders/history": {
+      "get": {
+        "tags": [
+          "trading"
+        ],
+        "summary": "Order history, including terminal orders.",
+        "operationId": "order_history",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "description": "Limit to one market.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Limit to one status.",
+            "required": false,
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/OrderStatus"
+                }
+              ],
+              "nullable": true
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous response's `next_cursor`. Omit for the first page.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum items to return. Clamped to `MAX_LIMIT`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "nullable": true,
+              "maximum": 500,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "description": "Sort direction. Defaults to newest-first.",
+            "required": false,
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/SortDirection"
+                }
+              ],
+              "nullable": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Order history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items",
+                    "has_more"
+                  ],
+                  "properties": {
+                    "has_more": {
+                      "type": "boolean",
+                      "description": "Whether another page exists. Equivalent to `next_cursor` being present."
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/OrderResponse"
+                      },
+                      "description": "The page of items, in the requested direction."
+                    },
+                    "next_cursor": {
+                      "type": "string",
+                      "description": "Opaque cursor for the next page; pass it back as `cursor`. Omitted on the last page."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      }
+    },
+    "/api/v1/trading/orders/{order_id}": {
+      "get": {
+        "tags": [
+          "trading"
+        ],
+        "summary": "One order.",
+        "operationId": "get_order",
+        "parameters": [
+          {
+            "name": "order_id",
+            "in": "path",
+            "description": "Order id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/OrderResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such order on this account"
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      },
+      "delete": {
+        "tags": [
+          "trading"
+        ],
+        "summary": "Cancels an order, releasing only what is still reserved.",
+        "operationId": "cancel_order",
+        "parameters": [
+          {
+            "name": "order_id",
+            "in": "path",
+            "description": "Order id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cancelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/OrderResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such order on this account"
+          },
+          "409": {
+            "description": "The order is no longer open"
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "trade"
+      }
+    },
+    "/api/v1/trading/trades": {
+      "get": {
+        "tags": [
+          "trading"
+        ],
+        "summary": "The caller's executions.",
+        "operationId": "trade_history",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "description": "Limit to one market.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous response's `next_cursor`. Omit for the first page.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum items to return. Clamped to `MAX_LIMIT`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "nullable": true,
+              "maximum": 500,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "description": "Sort direction. Defaults to newest-first.",
+            "required": false,
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/SortDirection"
+                }
+              ],
+              "nullable": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Trade history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items",
+                    "has_more"
+                  ],
+                  "properties": {
+                    "has_more": {
+                      "type": "boolean",
+                      "description": "Whether another page exists. Equivalent to `next_cursor` being present."
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/FillResponse"
+                      },
+                      "description": "The page of items, in the requested direction."
+                    },
+                    "next_cursor": {
+                      "type": "string",
+                      "description": "Opaque cursor for the next page; pass it back as `cursor`. Omitted on the last page."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      }
+    },
+    "/api/v1/wallet/deposit-address": {
+      "get": {
+        "tags": [
+          "wallet"
+        ],
+        "summary": "The caller's deposit address for an asset on a network.",
+        "description": "Idempotent: the same address is returned on every call.",
+        "operationId": "deposit_address",
+        "parameters": [
+          {
+            "name": "asset",
+            "in": "query",
+            "description": "Asset symbol.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "BTC"
+          },
+          {
+            "name": "network",
+            "in": "query",
+            "description": "Network code.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "bitcoin-mainnet"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deposit address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/DepositAddressResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such asset or network"
+          },
+          "422": {
+            "description": "Deposits are disabled for this pairing"
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read",
+        "x-side-effect": "creates_address"
+      }
+    },
+    "/api/v1/wallet/deposits": {
+      "get": {
+        "tags": [
+          "wallet"
+        ],
+        "summary": "Deposit history.",
+        "operationId": "list_deposits",
+        "parameters": [
+          {
+            "name": "asset",
+            "in": "query",
+            "description": "Limit to one asset.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous response's `next_cursor`. Omit for the first page.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum items to return. Clamped to `MAX_LIMIT`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "nullable": true,
+              "maximum": 500,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "description": "Sort direction. Defaults to newest-first.",
+            "required": false,
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/SortDirection"
+                }
+              ],
+              "nullable": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deposits",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items",
+                    "has_more"
+                  ],
+                  "properties": {
+                    "has_more": {
+                      "type": "boolean",
+                      "description": "Whether another page exists. Equivalent to `next_cursor` being present."
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/DepositResponse"
+                      },
+                      "description": "The page of items, in the requested direction."
+                    },
+                    "next_cursor": {
+                      "type": "string",
+                      "description": "Opaque cursor for the next page; pass it back as `cursor`. Omitted on the last page."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      }
+    },
+    "/api/v1/wallet/deposits/{deposit_id}": {
+      "get": {
+        "tags": [
+          "wallet"
+        ],
+        "summary": "One deposit.",
+        "operationId": "get_deposit",
+        "parameters": [
+          {
+            "name": "deposit_id",
+            "in": "path",
+            "description": "Deposit id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deposit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/DepositResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such deposit on this account"
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      }
+    },
+    "/api/v1/wallet/withdrawal-addresses": {
+      "get": {
+        "tags": [
+          "wallet"
+        ],
+        "summary": "The caller's saved withdrawal addresses.",
+        "operationId": "list_withdrawal_addresses",
+        "responses": {
+          "200": {
+            "description": "Saved addresses",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/WithdrawalAddressResponse"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      }
+    },
+    "/api/v1/wallet/withdrawals": {
+      "get": {
+        "tags": [
+          "wallet"
+        ],
+        "summary": "Withdrawal history.",
+        "operationId": "list_withdrawals",
+        "parameters": [
+          {
+            "name": "asset",
+            "in": "query",
+            "description": "Limit to one asset.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor from a previous response's `next_cursor`. Omit for the first page.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum items to return. Clamped to `MAX_LIMIT`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "nullable": true,
+              "maximum": 500,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "description": "Sort direction. Defaults to newest-first.",
+            "required": false,
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/SortDirection"
+                }
+              ],
+              "nullable": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Withdrawals",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items",
+                    "has_more"
+                  ],
+                  "properties": {
+                    "has_more": {
+                      "type": "boolean",
+                      "description": "Whether another page exists. Equivalent to `next_cursor` being present."
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/WithdrawalResponse"
+                      },
+                      "description": "The page of items, in the requested direction."
+                    },
+                    "next_cursor": {
+                      "type": "string",
+                      "description": "Opaque cursor for the next page; pass it back as `cursor`. Omitted on the last page."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      }
+    },
+    "/api/v1/wallet/withdrawals/{withdrawal_id}": {
+      "get": {
+        "tags": [
+          "wallet"
+        ],
+        "summary": "One withdrawal, with its full status history.",
+        "operationId": "get_withdrawal",
+        "parameters": [
+          {
+            "name": "withdrawal_id",
+            "in": "path",
+            "description": "Withdrawal id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The withdrawal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/WithdrawalResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such withdrawal on this account"
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Amount": {
+        "type": "string",
+        "description": "Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: \"1.50000000\".",
+        "example": "1.50000000",
+        "pattern": "^-?\\d+(\\.\\d+)?$"
+      },
+      "ApiKeyResponse": {
+        "type": "object",
+        "description": "An existing key. Never carries the secret.",
+        "required": [
+          "id",
+          "key_id",
+          "label",
+          "scopes",
+          "allowed_ips",
+          "revoked",
+          "created_at"
+        ],
+        "properties": {
+          "allowed_ips": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Permitted source addresses. Empty means unrestricted."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was created."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it stops working.",
+            "nullable": true
+          },
+          "id": {
+            "type": "string",
+            "description": "Opaque key identifier, used to revoke it."
+          },
+          "key_id": {
+            "type": "string",
+            "description": "The public key id, sent as `X-API-Key`."
+          },
+          "label": {
+            "type": "string",
+            "description": "Human label."
+          },
+          "last_used_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was last used, if ever.",
+            "nullable": true
+          },
+          "revoked": {
+            "type": "boolean",
+            "description": "Whether it has been revoked."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiScope"
+            },
+            "description": "Granted scopes."
+          }
+        }
+      },
+      "ApiScope": {
+        "type": "string",
+        "description": "Scope attached to an API key.\n\nHere scopes apply to API keys only, and a session token carries no key scopes at all.",
+        "enum": [
+          "read",
+          "trade"
+        ]
+      },
+      "AssetNetworkResponse": {
+        "type": "object",
+        "description": "An asset's policy on one network.",
+        "required": [
+          "network",
+          "network_name",
+          "token_kind",
+          "deposit_enabled",
+          "withdrawal_enabled",
+          "deposit_confirmations",
+          "min_deposit",
+          "min_withdrawal",
+          "withdrawal_fee",
+          "withdrawal_fee_asset",
+          "withdrawal_decimals",
+          "memo_supported",
+          "memo_required"
+        ],
+        "properties": {
+          "contract_address": {
+            "type": "string",
+            "description": "Contract address or chain asset id, for a token.",
+            "nullable": true
+          },
+          "deposit_confirmations": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Confirmations before a deposit is credited.",
+            "minimum": 0
+          },
+          "deposit_enabled": {
+            "type": "boolean",
+            "description": "Whether deposits are accepted."
+          },
+          "maintenance": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MaintenanceState"
+              }
+            ],
+            "nullable": true
+          },
+          "max_withdrawal": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Amount"
+              }
+            ],
+            "nullable": true
+          },
+          "memo_label": {
+            "type": "string",
+            "description": "What to call the memo field in a UI.",
+            "nullable": true
+          },
+          "memo_required": {
+            "type": "boolean",
+            "description": "Whether a memo is mandatory."
+          },
+          "memo_supported": {
+            "type": "boolean",
+            "description": "Whether the network uses a memo / destination tag."
+          },
+          "min_deposit": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "min_withdrawal": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "network": {
+            "type": "string",
+            "description": "Network code.",
+            "example": "bitcoin-mainnet"
+          },
+          "network_name": {
+            "type": "string",
+            "description": "Network display name."
+          },
+          "notice": {
+            "type": "string",
+            "description": "Operator note.",
+            "nullable": true
+          },
+          "token_kind": {
+            "type": "string",
+            "description": "How the asset exists on this chain."
+          },
+          "withdrawal_decimals": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Decimal places a withdrawal amount is truncated to.",
+            "minimum": 0
+          },
+          "withdrawal_enabled": {
+            "type": "boolean",
+            "description": "Whether withdrawals are accepted."
+          },
+          "withdrawal_fee": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "withdrawal_fee_asset": {
+            "type": "string",
+            "description": "Asset the withdrawal fee is charged in."
+          }
+        }
+      },
+      "AssetResponse": {
+        "type": "object",
+        "description": "A tradable asset.",
+        "required": [
+          "symbol",
+          "name",
+          "decimals",
+          "display_decimals",
+          "trading_enabled",
+          "usd_price",
+          "usd_price_updated_at",
+          "usd_price_stale",
+          "max_price_age_secs",
+          "networks"
+        ],
+        "properties": {
+          "decimals": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Accounting precision: the decimal places the exchange records internally.\n\nUse this for arithmetic. For rendering, use `display_decimals`.",
+            "minimum": 0
+          },
+          "display_decimals": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Decimal places to show in a user interface.\n\nAlways less than or equal to `decimals`. Rounding for display is presentation only and must never be fed back into a request.",
+            "minimum": 0
+          },
+          "icon_key": {
+            "type": "string",
+            "description": "Identifier for a client-bundled icon, when no logo URL is set.",
+            "nullable": true
+          },
+          "logo_url": {
+            "type": "string",
+            "description": "Logo URL, when the operator has configured one.",
+            "nullable": true
+          },
+          "max_price_age_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How old this asset's price may be before it is refused, in seconds.\n\nThe global default unless an operator set an override for this asset. Exposed beside the flag because the flag alone cannot explain itself: an asset that is not stale after a week and one that is not stale after an hour look identical without it.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name."
+          },
+          "networks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssetNetworkResponse"
+            },
+            "description": "Networks this asset can be deposited to or withdrawn from."
+          },
+          "notice": {
+            "type": "string",
+            "description": "Operator note, e.g. why deposits are paused.",
+            "nullable": true
+          },
+          "symbol": {
+            "type": "string",
+            "description": "Uppercase ticker.",
+            "example": "BTC"
+          },
+          "trading_enabled": {
+            "type": "boolean",
+            "description": "Whether the asset may appear in markets."
+          },
+          "usd_price": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "usd_price_stale": {
+            "type": "boolean",
+            "description": "Whether that price is too old to compute with.\n\nWhen true, the exchange refuses to derive anything from it: daily limits and auto-approval fail closed rather than guess, and a stored USD value is recorded as absent rather than as a confident wrong figure."
+          },
+          "usd_price_updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When that price was last set.\n\nExposed because the price is typed in by an operator and refreshed by nothing \u2014 there is no feed. Without the timestamp a caller cannot tell a price set an hour ago from one set last month, and both look equally authoritative."
+          },
+          "website_url": {
+            "type": "string",
+            "description": "Project website.",
+            "nullable": true
+          }
+        }
+      },
+      "BalanceResponse": {
+        "type": "object",
+        "description": "A balance in one asset.",
+        "required": [
+          "asset",
+          "available",
+          "locked",
+          "pending",
+          "total"
+        ],
+        "properties": {
+          "asset": {
+            "type": "string",
+            "description": "Asset symbol."
+          },
+          "available": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "locked": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "pending": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "total": {
+            "$ref": "#/components/schemas/Amount"
+          }
+        }
+      },
+      "CancelAllRequest": {
+        "type": "object",
+        "description": "Cancels every open order, optionally within one market.",
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "description": "Limit the cancellation to one market.",
+            "nullable": true
+          }
+        }
+      },
+      "CancelAllResponse": {
+        "type": "object",
+        "description": "What a bulk cancellation achieved.",
+        "required": [
+          "cancelled",
+          "failed"
+        ],
+        "properties": {
+          "cancelled": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Orders cancelled."
+          },
+          "failed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Orders that could not be cancelled. Each failure is logged server-side."
+          }
+        }
+      },
+      "CandleInterval": {
+        "type": "string",
+        "description": "Candle/kline intervals for market data.",
+        "enum": [
+          "1m",
+          "5m",
+          "15m",
+          "30m",
+          "1h",
+          "4h",
+          "1d",
+          "1w"
+        ]
+      },
+      "CandleResponse": {
+        "type": "object",
+        "description": "An OHLCV bucket.",
+        "required": [
+          "open_time",
+          "open",
+          "high",
+          "low",
+          "close",
+          "volume",
+          "quote_volume",
+          "trade_count"
+        ],
+        "properties": {
+          "close": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "high": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "low": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "open": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "open_time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Bucket start."
+          },
+          "quote_volume": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "trade_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of trades.",
+            "minimum": 0
+          },
+          "volume": {
+            "$ref": "#/components/schemas/Amount"
+          }
+        }
+      },
+      "DepositAddressResponse": {
+        "type": "object",
+        "description": "A deposit address.",
+        "required": [
+          "asset",
+          "network",
+          "address",
+          "deposit_confirmations",
+          "min_deposit",
+          "created_at"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The address to send to."
+          },
+          "asset": {
+            "type": "string",
+            "description": "Asset symbol."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the address was issued."
+          },
+          "deposit_confirmations": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Confirmations before the deposit is credited.",
+            "minimum": 0
+          },
+          "memo": {
+            "type": "string",
+            "description": "Memo / destination tag. **Required when present** \u2014 a deposit without it may be unrecoverable.",
+            "nullable": true
+          },
+          "memo_label": {
+            "type": "string",
+            "description": "What to call the memo field in a UI.",
+            "nullable": true
+          },
+          "min_deposit": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "network": {
+            "type": "string",
+            "description": "Network code."
+          }
+        }
+      },
+      "DepositResponse": {
+        "type": "object",
+        "description": "A deposit.",
+        "required": [
+          "id",
+          "asset",
+          "network",
+          "amount",
+          "status",
+          "txid",
+          "output_index",
+          "confirmations",
+          "required_confirmations",
+          "address",
+          "first_seen_at"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "Address that received it."
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "asset": {
+            "type": "string",
+            "description": "Asset symbol."
+          },
+          "confirmations": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Confirmations observed.",
+            "minimum": 0
+          },
+          "credited_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was credited.",
+            "nullable": true
+          },
+          "explorer_url": {
+            "type": "string",
+            "description": "Explorer link, when the network has one configured.",
+            "nullable": true
+          },
+          "first_seen_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was first observed."
+          },
+          "id": {
+            "type": "string",
+            "description": "Deposit id."
+          },
+          "memo": {
+            "type": "string",
+            "description": "Memo, if any.",
+            "nullable": true
+          },
+          "network": {
+            "type": "string",
+            "description": "Network code."
+          },
+          "note": {
+            "type": "string",
+            "description": "Operator note, e.g. why it was reversed.",
+            "nullable": true
+          },
+          "output_index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Position within the transaction. Distinguishes two outputs of one transaction.",
+            "minimum": 0
+          },
+          "required_confirmations": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Confirmations required to credit.",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/DepositStatus"
+          },
+          "txid": {
+            "type": "string",
+            "description": "Transaction hash."
+          }
+        }
+      },
+      "DepositStatus": {
+        "type": "string",
+        "description": "Lifecycle of an incoming blockchain deposit.\n\nOne enum makes those unrepresentable.",
+        "enum": [
+          "detected",
+          "credited",
+          "reversed",
+          "orphaned",
+          "below_minimum",
+          "under_review",
+          "internal"
+        ]
+      },
+      "ErrorBody": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "retryable"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ErrorCode"
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable; may change. Branch on `code`."
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "fields": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "request_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "retryable": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ErrorCode": {
+        "type": "string",
+        "enum": [
+          "VALIDATION_FAILED",
+          "MALFORMED_REQUEST",
+          "INVALID_CURSOR",
+          "PRECISION_EXCEEDED",
+          "BELOW_MINIMUM",
+          "ABOVE_MAXIMUM",
+          "INVALID_ADDRESS",
+          "MEMO_REQUIRED",
+          "UNAUTHENTICATED",
+          "INVALID_CREDENTIALS",
+          "TOKEN_EXPIRED",
+          "SESSION_REVOKED",
+          "TWO_FACTOR_REQUIRED",
+          "TWO_FACTOR_INVALID",
+          "FRESH_TWO_FACTOR_REQUIRED",
+          "FORBIDDEN",
+          "API_KEY_NOT_ALLOWED",
+          "FUTURES_RESTRICTED",
+          "ACCOUNT_FROZEN",
+          "ACCOUNT_ON_HOLD",
+          "EMAIL_NOT_VERIFIED",
+          "REGION_BLOCKED",
+          "NOT_FOUND",
+          "METHOD_NOT_ALLOWED",
+          "ALREADY_EXISTS",
+          "INVALID_STATE",
+          "IDEMPOTENCY_KEY_CONFLICT",
+          "WINDOW_OPEN",
+          "EVIDENCE_CONTRADICTS",
+          "AMOUNT_MISMATCH",
+          "CONCURRENT_MODIFICATION",
+          "INSUFFICIENT_FUNDS",
+          "INSUFFICIENT_FEE_FUNDS",
+          "MARKET_UNAVAILABLE",
+          "DEPOSIT_DISABLED",
+          "WITHDRAWAL_DISABLED",
+          "SELF_TRADE_BLOCKED",
+          "LIMIT_EXCEEDED",
+          "RATE_LIMITED",
+          "INTERNAL",
+          "SERVICE_UNAVAILABLE",
+          "UNDER_MAINTENANCE",
+          "ENGINE_OVERLOADED"
+        ],
+        "description": "PROVISIONAL (errors.yaml) until the served spec includes it."
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "description": "The error envelope returned by every failing request.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody"
+          }
+        }
+      },
+      "ExchangeConfigResponse": {
+        "type": "object",
+        "description": "Public exchange configuration.\n\nEverything a frontend needs to render itself without a deploy: branding, limits, supported intervals, and whether the exchange is in maintenance.",
+        "required": [
+          "name",
+          "maintenance_mode",
+          "candle_intervals",
+          "two_factor_freshness_seconds",
+          "default_page_size",
+          "max_page_size",
+          "registration_enabled",
+          "email_verification_required",
+          "websocket_path",
+          "websocket_protocol_version",
+          "password_rules",
+          "features"
+        ],
+        "properties": {
+          "candle_intervals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CandleInterval"
+            },
+            "description": "Candle intervals the API serves."
+          },
+          "default_page_size": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Default page size for paginated endpoints.",
+            "minimum": 0
+          },
+          "email_verification_required": {
+            "type": "boolean",
+            "description": "Whether registration verifies the email address with an emailed code before the authenticator step. Lets a signup form show the right number of steps up front."
+          },
+          "features": {
+            "type": "object",
+            "description": "Feature flags a frontend may use to hide unavailable functionality.\n\nPresentation only. The backend enforces every rule independently.",
+            "additionalProperties": {
+              "type": "boolean"
+            }
+          },
+          "maintenance_message": {
+            "type": "string",
+            "description": "Message to show while in maintenance.",
+            "nullable": true
+          },
+          "maintenance_mode": {
+            "type": "boolean",
+            "description": "Whether the exchange is in maintenance mode."
+          },
+          "max_page_size": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Maximum page size.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name."
+          },
+          "password_rules": {
+            "$ref": "#/components/schemas/PasswordRules"
+          },
+          "registration_enabled": {
+            "type": "boolean",
+            "description": "Whether new registrations are accepted."
+          },
+          "support_url": {
+            "type": "string",
+            "description": "Support contact.",
+            "nullable": true
+          },
+          "two_factor_freshness_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds a verified two-factor code authorises sensitive actions for.",
+            "minimum": 0
+          },
+          "websocket_path": {
+            "type": "string",
+            "description": "Where to open the realtime connection, relative to this API's origin."
+          },
+          "websocket_protocol_version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The realtime protocol version this server speaks.",
+            "minimum": 0
+          }
+        }
+      },
+      "ExitPoolRequest": {
+        "type": "object",
+        "description": "Removes liquidity from a pool.",
+        "required": [
+          "shares"
+        ],
+        "properties": {
+          "shares": {
+            "$ref": "#/components/schemas/Amount"
+          }
+        }
+      },
+      "ExitPoolResponse": {
+        "type": "object",
+        "description": "What an exit produced.",
+        "required": [
+          "shares_burned",
+          "base_returned",
+          "quote_returned",
+          "shares_held"
+        ],
+        "properties": {
+          "base_returned": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "quote_returned": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "shares_burned": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "shares_held": {
+            "$ref": "#/components/schemas/Amount"
+          }
+        }
+      },
+      "FeeScheduleResponse": {
+        "type": "object",
+        "description": "A fee tier.",
+        "required": [
+          "tier",
+          "label",
+          "min_30d_volume_usd",
+          "maker_fee_percent",
+          "taker_fee_percent"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "Human label."
+          },
+          "maker_fee_percent": {
+            "type": "string",
+            "description": "Maker rate, as a percentage.",
+            "example": "0.1"
+          },
+          "min_30d_volume_usd": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "taker_fee_percent": {
+            "type": "string",
+            "description": "Taker rate, as a percentage.",
+            "example": "0.2"
+          },
+          "tier": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Tier index.",
+            "minimum": 0
+          }
+        }
+      },
+      "FillResponse": {
+        "type": "object",
+        "description": "One of the caller's executions.",
+        "required": [
+          "trade_id",
+          "order_id",
+          "symbol",
+          "side",
+          "role",
+          "price",
+          "quantity",
+          "quote_quantity",
+          "fee",
+          "fee_asset",
+          "timestamp"
+        ],
+        "properties": {
+          "fee": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "fee_asset": {
+            "type": "string",
+            "description": "Asset the fee was charged in."
+          },
+          "order_id": {
+            "type": "string",
+            "description": "The caller's order."
+          },
+          "price": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "quantity": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "quote_quantity": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "role": {
+            "$ref": "#/components/schemas/LiquidityRole"
+          },
+          "side": {
+            "$ref": "#/components/schemas/OrderSide"
+          },
+          "symbol": {
+            "type": "string",
+            "description": "Market symbol."
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it executed."
+          },
+          "trade_id": {
+            "type": "string",
+            "description": "Trade id."
+          }
+        }
+      },
+      "JoinPoolRequest": {
+        "type": "object",
+        "description": "Adds liquidity to a pool.",
+        "required": [
+          "base_amount",
+          "quote_amount"
+        ],
+        "properties": {
+          "base_amount": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "max_ratio_deviation_percent": {
+            "type": "string",
+            "description": "How far, in percent, the offered ratio may sit from the pool's own before the request is refused rather than repriced. Defaults to 1%.",
+            "example": "1",
+            "nullable": true
+          },
+          "quote_amount": {
+            "$ref": "#/components/schemas/Amount"
+          }
+        }
+      },
+      "JoinPoolResponse": {
+        "type": "object",
+        "description": "What a join produced.",
+        "required": [
+          "shares_minted",
+          "base_deposited",
+          "quote_deposited",
+          "shares_held"
+        ],
+        "properties": {
+          "base_deposited": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "quote_deposited": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "shares_held": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "shares_minted": {
+            "$ref": "#/components/schemas/Amount"
+          }
+        }
+      },
+      "LedgerEntryKind": {
+        "type": "string",
+        "description": "What a ledger entry records.\n\nAdding a money-moving feature means adding a variant here and emitting entries \u2014 never editing a balance formula.",
+        "enum": [
+          "deposit",
+          "deposit_reversal",
+          "withdrawal_debit",
+          "withdrawal_fee",
+          "withdrawal_fee_reserve",
+          "withdrawal_release",
+          "withdrawal_fee_release",
+          "order_reserve",
+          "withdrawal_reserve",
+          "order_release",
+          "trade_debit",
+          "trade_credit",
+          "trade_fee",
+          "transfer_out",
+          "transfer_in",
+          "adjustment_credit",
+          "adjustment_debit",
+          "rebate",
+          "pool_join",
+          "pool_exit",
+          "futures_transfer_reserve",
+          "futures_transfer_release",
+          "futures_collateral_sent",
+          "futures_collateral_returned",
+          "trade_fee_revenue",
+          "withdrawal_fee_revenue",
+          "futures_transfer_fee_revenue",
+          "futures_hyperliquid_cost",
+          "futures_transfer_discrepancy",
+          "exchange_capital"
+        ]
+      },
+      "LedgerEntryResponse": {
+        "type": "object",
+        "description": "One entry from the account's ledger.",
+        "required": [
+          "id",
+          "asset",
+          "kind",
+          "available_delta",
+          "locked_delta",
+          "pending_delta",
+          "available_after",
+          "sequence",
+          "reference",
+          "created_at"
+        ],
+        "properties": {
+          "asset": {
+            "type": "string",
+            "description": "Asset symbol."
+          },
+          "available_after": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "available_delta": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was applied."
+          },
+          "id": {
+            "type": "string",
+            "description": "Entry id."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/LedgerEntryKind"
+          },
+          "locked_delta": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "pending_delta": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "reference": {
+            "description": "What caused the entry."
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Position in this account's history for this asset."
+          }
+        }
+      },
+      "LiquidityRole": {
+        "type": "string",
+        "description": "Whether a fill added liquidity (maker) or removed it (taker).",
+        "enum": [
+          "maker",
+          "taker"
+        ]
+      },
+      "MaintenanceReason": {
+        "type": "string",
+        "description": "Machine-readable reasons a capability is unavailable.",
+        "enum": [
+          "exchange_maintenance",
+          "network_unavailable",
+          "deposits_disabled",
+          "withdrawals_disabled",
+          "asset_unavailable"
+        ]
+      },
+      "MaintenanceState": {
+        "type": "object",
+        "description": "Why a capability is currently unavailable.",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "Operator-supplied explanation, when there is one.",
+            "nullable": true
+          },
+          "reason": {
+            "$ref": "#/components/schemas/MaintenanceReason"
+          }
+        }
+      },
+      "MarketResponse": {
+        "type": "object",
+        "description": "A tradable market and its current ticker.",
+        "required": [
+          "symbol",
+          "base_asset",
+          "quote_asset",
+          "status",
+          "price_decimals",
+          "quantity_decimals",
+          "min_quantity",
+          "min_notional",
+          "tick_size",
+          "lot_size",
+          "supported_order_types",
+          "supported_time_in_force",
+          "last_price",
+          "best_bid",
+          "best_ask",
+          "high_24h",
+          "low_24h",
+          "volume_24h",
+          "quote_volume_24h",
+          "change_24h_percent"
+        ],
+        "properties": {
+          "base_asset": {
+            "type": "string",
+            "description": "Base asset symbol."
+          },
+          "best_ask": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "best_bid": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "change_24h_percent": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "high_24h": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "last_price": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "last_trade_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Time of the most recent trade.",
+            "nullable": true
+          },
+          "lot_size": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "low_24h": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "max_quantity": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Amount"
+              }
+            ],
+            "nullable": true
+          },
+          "min_notional": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "min_quantity": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "price_decimals": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Decimal places a price may carry.",
+            "minimum": 0
+          },
+          "quantity_decimals": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Decimal places a quantity may carry.",
+            "minimum": 0
+          },
+          "quote_asset": {
+            "type": "string",
+            "description": "Quote asset symbol."
+          },
+          "quote_volume_24h": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MarketStatus"
+          },
+          "supported_order_types": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrderType"
+            },
+            "description": "Order types this market accepts."
+          },
+          "supported_time_in_force": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TimeInForce"
+            },
+            "description": "Time-in-force options this market accepts."
+          },
+          "symbol": {
+            "type": "string",
+            "description": "`BASE/QUOTE`.",
+            "example": "BTC/USDT"
+          },
+          "tick_size": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "trading_starts_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When trading opens, for a market not yet live.",
+            "nullable": true
+          },
+          "volume_24h": {
+            "$ref": "#/components/schemas/Amount"
+          }
+        }
+      },
+      "MarketStatus": {
+        "type": "string",
+        "description": "Trading availability of a market.",
+        "enum": [
+          "active",
+          "paused",
+          "sell_only",
+          "pre_trading",
+          "delisted"
+        ]
+      },
+      "NetworkResponse": {
+        "type": "object",
+        "description": "A blockchain network.",
+        "required": [
+          "code",
+          "name",
+          "is_active",
+          "average_block_seconds",
+          "reachable",
+          "deposits_operational"
+        ],
+        "properties": {
+          "average_block_seconds": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Typical seconds between blocks, for estimating confirmation time.",
+            "minimum": 0
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable code.",
+            "example": "bitcoin-mainnet"
+          },
+          "deposits_operational": {
+            "type": "boolean",
+            "description": "Whether deposits on this network are actually being detected.\n\nFalse means either half of the pipeline is down: the last scan pass failed \u2014 a refused block range, a rate limit, a node that answers but will not serve logs \u2014 or finality could not be established, so deposits are being held rather than credited.\n\nDeposits sent now will be credited late, whenever the chain recovers, rather than lost. This is the field a status page should use to say deposits are degraded; `reachable` only says the node replies, which it may well do while yielding nothing."
+          },
+          "explorer_address_url_template": {
+            "type": "string",
+            "description": "Template for an address explorer link. `{address}` is substituted.",
+            "nullable": true
+          },
+          "explorer_tx_url_template": {
+            "type": "string",
+            "description": "Template for a transaction explorer link. `{txid}` is substituted.\n\nAbsent when the operator has configured none; render no link rather than guessing a URL.",
+            "nullable": true
+          },
+          "is_active": {
+            "type": "boolean",
+            "description": "Whether the network is operational."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name."
+          },
+          "reachable": {
+            "type": "boolean",
+            "description": "Whether the node answers at all.\n\nNarrower than it sounds, and deliberately so: a reachable node can still be failing to yield deposits. Do not render this alone as \"network up\"."
+          }
+        }
+      },
+      "NotificationKind": {
+        "type": "string",
+        "description": "What a notice is about.\n\nA closed enum so a client can render each kind deliberately \u2014 an icon, a colour, a link \u2014 rather than pattern-matching on prose that may be reworded.",
+        "enum": [
+          "deposit_detected",
+          "deposit_credited",
+          "withdrawal_requested",
+          "withdrawal_sent",
+          "withdrawal_completed",
+          "withdrawal_failed",
+          "order_filled",
+          "security",
+          "listing_decision",
+          "announcement"
+        ]
+      },
+      "NotificationResponse": {
+        "type": "object",
+        "description": "An in-app notice.",
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "body",
+          "read",
+          "created_at"
+        ],
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "One or two sentences."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was created."
+          },
+          "id": {
+            "type": "string",
+            "description": "Notice id."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/NotificationKind"
+          },
+          "read": {
+            "type": "boolean",
+            "description": "Whether it has been read."
+          },
+          "resource_id": {
+            "type": "string",
+            "description": "The referenced resource's opaque id, for linking.",
+            "nullable": true
+          },
+          "resource_type": {
+            "type": "string",
+            "description": "What it refers to: `deposit`, `withdrawal`, `order`.",
+            "nullable": true
+          },
+          "title": {
+            "type": "string",
+            "description": "Short heading."
+          }
+        }
+      },
+      "OrderBookResponse": {
+        "type": "object",
+        "description": "One side of the order book, aggregated by price.",
+        "required": [
+          "symbol",
+          "bids",
+          "asks",
+          "sequence",
+          "timestamp"
+        ],
+        "properties": {
+          "asks": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Amount"
+              }
+            },
+            "description": "Asks, best first."
+          },
+          "bids": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Amount"
+              }
+            },
+            "description": "Bids, best first, as `[price, quantity]` pairs."
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The realtime sequence this snapshot is current as of.\n\nTo synchronise with the `orderbook:{symbol}` WebSocket channel: subscribe first, fetch this snapshot, and ignore updates whose `sequence` is at or below this value. Every update carries the complete top 50 levels of both sides and replaces the previous state (there are no deltas). A gap in `sequence` only means the book was briefly stale; the next update is complete.",
+            "minimum": 0
+          },
+          "symbol": {
+            "type": "string",
+            "description": "Market symbol."
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this snapshot was taken."
+          }
+        }
+      },
+      "OrderResponse": {
+        "type": "object",
+        "description": "An order.",
+        "required": [
+          "id",
+          "symbol",
+          "side",
+          "type",
+          "time_in_force",
+          "status",
+          "quantity",
+          "filled_quantity",
+          "remaining_quantity",
+          "filled_quote_quantity",
+          "fee_paid",
+          "reserved_remaining",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "average_price": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Amount"
+              }
+            ],
+            "nullable": true
+          },
+          "client_order_id": {
+            "type": "string",
+            "description": "Your identifier, if you supplied one.",
+            "nullable": true
+          },
+          "closed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it reached a terminal state.",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was placed."
+          },
+          "fee_asset": {
+            "type": "string",
+            "description": "Asset the fees were charged in.",
+            "nullable": true
+          },
+          "fee_paid": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "filled_quantity": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "filled_quote_quantity": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "id": {
+            "type": "string",
+            "description": "Order id."
+          },
+          "price": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Amount"
+              }
+            ],
+            "nullable": true
+          },
+          "quantity": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "quote_quantity": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Amount"
+              }
+            ],
+            "nullable": true
+          },
+          "remaining_quantity": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "reserved_remaining": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "side": {
+            "$ref": "#/components/schemas/OrderSide"
+          },
+          "status": {
+            "$ref": "#/components/schemas/OrderStatus"
+          },
+          "status_reason": {
+            "type": "string",
+            "description": "Why the order was rejected or cancelled.",
+            "nullable": true
+          },
+          "stop_price": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Amount"
+              }
+            ],
+            "nullable": true
+          },
+          "symbol": {
+            "type": "string",
+            "description": "Market symbol."
+          },
+          "time_in_force": {
+            "$ref": "#/components/schemas/TimeInForce"
+          },
+          "trigger_direction": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TriggerDirection"
+              }
+            ],
+            "nullable": true
+          },
+          "triggered_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the trigger fired, if it has.",
+            "nullable": true
+          },
+          "type": {
+            "$ref": "#/components/schemas/OrderType"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it last changed."
+          }
+        }
+      },
+      "OrderSide": {
+        "type": "string",
+        "description": "Which side of a market an order takes.",
+        "enum": [
+          "buy",
+          "sell"
+        ]
+      },
+      "OrderStatus": {
+        "type": "string",
+        "description": "Lifecycle of an order.",
+        "enum": [
+          "pending",
+          "open",
+          "partially_filled",
+          "filled",
+          "cancelled",
+          "rejected",
+          "pending_trigger",
+          "expired"
+        ]
+      },
+      "OrderType": {
+        "type": "string",
+        "description": "Order types the matching engine accepts.\n\nThat separation is kept: this enum covers what the book itself understands.",
+        "enum": [
+          "limit",
+          "market",
+          "stop_limit",
+          "stop_market"
+        ]
+      },
+      "PasswordRules": {
+        "type": "object",
+        "description": "Password constraints, published so a form can validate locally.",
+        "required": [
+          "min_length",
+          "max_length",
+          "allows_email_substring",
+          "description"
+        ],
+        "properties": {
+          "allows_email_substring": {
+            "type": "boolean",
+            "description": "Whether the password may contain the account's email address."
+          },
+          "description": {
+            "type": "string",
+            "description": "A short description of any further rules, for display beside the input."
+          },
+          "max_length": {
+            "type": "integer",
+            "description": "Maximum length in characters.",
+            "minimum": 0
+          },
+          "min_length": {
+            "type": "integer",
+            "description": "Minimum length in characters.",
+            "minimum": 0
+          }
+        }
+      },
+      "PlaceOrderRequest": {
+        "type": "object",
+        "description": "Places an order.\n\nSet `client_order_id` to make a retry safe: it is unique per account, a repeated id is refused before any funds move, and the order can be recovered with GET /api/v1/trading/orders/by-client-id/{client_order_id}. `Idempotency-Key` has no effect on this endpoint.",
+        "required": [
+          "symbol",
+          "side",
+          "type"
+        ],
+        "properties": {
+          "client_order_id": {
+            "type": "string",
+            "description": "Your own identifier. Unique per account.",
+            "nullable": true
+          },
+          "price": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Amount"
+              }
+            ],
+            "nullable": true
+          },
+          "quantity": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Amount"
+              }
+            ],
+            "nullable": true
+          },
+          "quote_quantity": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Amount"
+              }
+            ],
+            "nullable": true
+          },
+          "side": {
+            "$ref": "#/components/schemas/OrderSide"
+          },
+          "stop_price": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Amount"
+              }
+            ],
+            "nullable": true
+          },
+          "symbol": {
+            "type": "string",
+            "description": "Market symbol.",
+            "example": "BTC/USDT"
+          },
+          "time_in_force": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TimeInForce"
+              }
+            ],
+            "nullable": true
+          },
+          "trigger_direction": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TriggerDirection"
+              }
+            ],
+            "nullable": true
+          },
+          "type": {
+            "$ref": "#/components/schemas/OrderType"
+          }
+        }
+      },
+      "PlaceOrderResponse": {
+        "type": "object",
+        "description": "The result of placing an order, including anything it executed immediately.",
+        "required": [
+          "order",
+          "fills"
+        ],
+        "properties": {
+          "fills": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FillResponse"
+            },
+            "description": "Fills produced on entry, oldest first."
+          },
+          "order": {
+            "$ref": "#/components/schemas/OrderResponse"
+          }
+        }
+      },
+      "PoolResponse": {
+        "type": "object",
+        "description": "A pool as a client sees it.\n\nReserves are the custody account's balances, so they include liquidity currently locked in resting orders. `price` is the curve's mid, which sits between the pool's own best bid and ask by exactly its fee \u2014 it is not a traded price.",
+        "required": [
+          "id",
+          "symbol",
+          "status",
+          "base_reserve",
+          "quote_reserve",
+          "fee_percent",
+          "shares_outstanding",
+          "ladder_steps",
+          "created_at"
+        ],
+        "properties": {
+          "base_reserve": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the pool was created."
+          },
+          "fee_percent": {
+            "type": "string",
+            "description": "The pool's fee, in percent, priced into every quote it rests.",
+            "example": "0.3"
+          },
+          "id": {
+            "type": "string",
+            "description": "Identifier."
+          },
+          "ladder_steps": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Ladder steps per side.",
+            "minimum": 0
+          },
+          "price": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Amount"
+              }
+            ],
+            "nullable": true
+          },
+          "quote_reserve": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "shares_outstanding": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PoolStatus"
+          },
+          "symbol": {
+            "type": "string",
+            "description": "Market the pool quotes."
+          }
+        }
+      },
+      "PoolStatus": {
+        "type": "string",
+        "description": "Whether a pool quotes, and whether it accepts new liquidity.",
+        "enum": [
+          "active",
+          "paused",
+          "closing"
+        ]
+      },
+      "PublicTradeResponse": {
+        "type": "object",
+        "description": "A public trade.\n\nDeliberately anonymous: no account identifiers, and no indication of which side was the resting order beyond the aggressor direction.",
+        "required": [
+          "id",
+          "price",
+          "quantity",
+          "side",
+          "sequence",
+          "timestamp"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Trade id."
+          },
+          "price": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "quantity": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Gapless per-market sequence."
+          },
+          "side": {
+            "$ref": "#/components/schemas/OrderSide"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it executed."
+          }
+        }
+      },
+      "ServerTimeResponse": {
+        "type": "object",
+        "description": "The server's clock.\n\nTwo-factor codes are time-based, so a client can compare its own clock against this before a skewed clock gets a correct code rejected.",
+        "required": [
+          "iso",
+          "epoch_ms"
+        ],
+        "properties": {
+          "epoch_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Current time in milliseconds since the Unix epoch."
+          },
+          "iso": {
+            "type": "string",
+            "description": "Current time as RFC 3339 with an explicit UTC offset.",
+            "example": "2024-05-01T12:34:56.789+00:00"
+          }
+        }
+      },
+      "SortDirection": {
+        "type": "string",
+        "description": "Sort direction for a paginated listing.",
+        "enum": [
+          "asc",
+          "desc"
+        ]
+      },
+      "SubAccountResponse": {
+        "type": "object",
+        "description": "A sub-account.",
+        "required": [
+          "id",
+          "label",
+          "is_active",
+          "can_withdraw",
+          "created_at"
+        ],
+        "properties": {
+          "can_withdraw": {
+            "type": "boolean",
+            "description": "Always `false`. A sub-account has no withdrawal path \u2014 stated explicitly so a client does not have to infer it."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was created."
+          },
+          "id": {
+            "type": "string",
+            "description": "Opaque identifier. Use it to transfer funds and to issue API keys."
+          },
+          "is_active": {
+            "type": "boolean",
+            "description": "Whether it may trade."
+          },
+          "label": {
+            "type": "string",
+            "description": "The label given at creation."
+          }
+        }
+      },
+      "TimeInForce": {
+        "type": "string",
+        "description": "How long an order remains eligible to match.",
+        "enum": [
+          "gtc",
+          "ioc",
+          "fok",
+          "post_only"
+        ]
+      },
+      "TriggerDirection": {
+        "type": "string",
+        "description": "Which way the price must move for a stop to fire.\n\nExplicit rather than inferred from the side, because the inference is ambiguous: a sell stop below the market is a stop-loss, and a sell stop above it is a take-profit. Both are legitimate, and guessing wrong means an order that fires at exactly the wrong moment \u2014 which is the one thing a protective order must never do.",
+        "enum": [
+          "above",
+          "below"
+        ]
+      },
+      "WithdrawalAddressResponse": {
+        "type": "object",
+        "description": "A saved withdrawal address.",
+        "required": [
+          "id",
+          "network",
+          "label",
+          "address",
+          "verified",
+          "created_at"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The address."
+          },
+          "asset": {
+            "type": "string",
+            "description": "Asset, when restricted to one.",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was saved."
+          },
+          "id": {
+            "type": "string",
+            "description": "Address-book entry id."
+          },
+          "label": {
+            "type": "string",
+            "description": "Your label."
+          },
+          "last_used_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was last withdrawn to.",
+            "nullable": true
+          },
+          "memo": {
+            "type": "string",
+            "description": "Memo, if any.",
+            "nullable": true
+          },
+          "network": {
+            "type": "string",
+            "description": "Network code."
+          },
+          "verified": {
+            "type": "boolean",
+            "description": "Whether ownership has been confirmed."
+          }
+        }
+      },
+      "WithdrawalHistoryEntry": {
+        "type": "object",
+        "description": "One transition in a withdrawal's life.",
+        "required": [
+          "status",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why, where a reason applies.",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/WithdrawalStatus"
+          }
+        }
+      },
+      "WithdrawalResponse": {
+        "type": "object",
+        "description": "A withdrawal.",
+        "required": [
+          "id",
+          "asset",
+          "network",
+          "amount",
+          "fee",
+          "fee_asset",
+          "status",
+          "address",
+          "confirmations",
+          "cancellable",
+          "history",
+          "created_at"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "Destination."
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "asset": {
+            "type": "string",
+            "description": "Asset symbol."
+          },
+          "broadcast_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was broadcast.",
+            "nullable": true
+          },
+          "cancellable": {
+            "type": "boolean",
+            "description": "Whether the account holder may still cancel it."
+          },
+          "completed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it confirmed to the required depth.",
+            "nullable": true
+          },
+          "confirmations": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Confirmations observed.",
+            "minimum": 0
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was requested."
+          },
+          "explorer_url": {
+            "type": "string",
+            "description": "Explorer link, when available.",
+            "nullable": true
+          },
+          "fee": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "fee_asset": {
+            "type": "string",
+            "description": "Asset the fee was charged in."
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WithdrawalHistoryEntry"
+            },
+            "description": "Transitions this withdrawal has been through."
+          },
+          "id": {
+            "type": "string",
+            "description": "Withdrawal id."
+          },
+          "memo": {
+            "type": "string",
+            "description": "Memo, if any.",
+            "nullable": true
+          },
+          "network": {
+            "type": "string",
+            "description": "Network code."
+          },
+          "status": {
+            "$ref": "#/components/schemas/WithdrawalStatus"
+          },
+          "txid": {
+            "type": "string",
+            "description": "Transaction hash, once broadcast.",
+            "nullable": true
+          }
+        }
+      },
+      "WithdrawalStatus": {
+        "type": "string",
+        "description": "Lifecycle of an outgoing withdrawal.",
+        "enum": [
+          "requested",
+          "pending_approval",
+          "approved",
+          "processing",
+          "broadcast",
+          "completed",
+          "rejected",
+          "cancelled",
+          "failed",
+          "broadcast_unknown"
+        ]
+      }
+    },
+    "securitySchemes": {
+      "api_key": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "Identifies the key. Sent with `X-API-Secret`, which authenticates it \u2014 both headers are required. Create one at `/account/api-keys`; the secret is shown once and never again. A key can read and trade. It can never withdraw or transfer, whatever its scopes, because those need a recently verified two-factor code and a program cannot produce one."
+      },
+      "api_secret": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Secret",
+        "description": "Authenticates the key identified by `X-API-Key`. Never sent in a query string: a URL reaches access logs, proxy logs and `Referer` headers."
+      }
+    }
+  }
+}

@@ -1,0 +1,165 @@
+"""HTTP transport (asyncio, ``httpx.AsyncClient``): auth headers, rate limiting, retries,
+error mapping.
+
+Async source; the synchronous ``cexy/_sync/transport.py`` is generated from it by ``scripts/unasync.py``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import uuid
+from typing import Any, Callable, Dict, Mapping, Optional
+
+import httpx
+
+from cexy._common import (
+    AUTO,
+    build_path,
+    build_query,
+    encode_body,
+    lower_headers,
+    operation,
+)
+from cexy._ratelimit import TokenBucket
+from cexy._retry import RetryPolicy
+from cexy.auth import Authenticator, redact_text
+from cexy.errors import (
+    CexyApiError,
+    CexyConnectionError,
+    MissingCredentialsError,
+    from_response,
+)
+
+logger = logging.getLogger("cexy")
+
+#: Network errors raised before the request could have reached the server.
+_NOT_SENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+#: 5xx statuses where the server may or may not have acted.
+_AMBIGUOUS_STATUS = frozenset({500, 502, 504})
+
+
+class AsyncTransport:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        auth: Optional[Authenticator],
+        timeout: float,
+        max_retries: int,
+        user_agent: str,
+        rate_limit_per_minute: float,
+        http_client: Optional[httpx.AsyncClient] = None,
+    ) -> None:
+        self.base_url = base_url
+        self.auth = auth
+        self.user_agent = user_agent
+        self.policy = RetryPolicy(max_retries=max_retries)
+        self.limiter = TokenBucket(per_minute=rate_limit_per_minute)
+        self._owns_http = http_client is None
+        self.http = http_client or httpx.AsyncClient(timeout=timeout, follow_redirects=False)
+        self._sleep = asyncio.sleep
+
+    def _secrets(self) -> tuple[str, ...]:
+        return self.auth.secrets() if self.auth is not None else ()
+
+    async def aclose(self) -> None:
+        if self._owns_http:
+            await self.http.aclose()
+
+    async def request(
+        self,
+        op_id: str,
+        *,
+        path: Optional[Mapping[str, str]] = None,
+        query: Optional[Mapping[str, Any]] = None,
+        body: Optional[Mapping[str, Any]] = None,
+        idempotency_key: Optional[str] = None,
+        raw: bool = False,
+        recover: Optional[Callable[[], Any]] = None,
+        on_retry_error: Optional[Callable[[CexyApiError], Any]] = None,
+    ) -> Any:
+        """Send one logical request, retrying where that is safe.
+
+        ``idempotency_key``: ``AUTO`` generates one; the same key is reused on every retry.
+        ``recover``: for non-idempotent creates (place_order). Called before retrying after
+        an ambiguous failure (the server may have acted); a non-None result is returned
+        instead of retrying.
+        ``on_retry_error``: called with the error when a *retry* (not the first attempt)
+        fails, because an earlier attempt may have succeeded (e.g. a repeated order is
+        refused as a duplicate, a repeated cancel as INVALID_STATE). A non-None result is
+        returned instead of raising.
+        """
+        op = operation(op_id)
+        url = self.base_url + build_path(op, path)
+        params = build_query(op, query)
+        content = encode_body(body)
+        headers: Dict[str, str] = {"User-Agent": self.user_agent, "Accept": "application/json"}
+        if content is not None:
+            headers["Content-Type"] = "application/json"
+        if op.auth == "api_key" and self.auth is None:
+            raise MissingCredentialsError(
+                f"{op.operation_id} requires an API key: construct the client with api_key and api_secret"
+            )
+        if idempotency_key is not None:
+            headers["Idempotency-Key"] = str(uuid.uuid4()) if idempotency_key == AUTO else idempotency_key
+
+        attempt = 0
+        while True:
+            wait = self.limiter.acquire()
+            if wait > 0:
+                logger.debug("cexy: client rate limiter waiting %.2fs", wait)
+                await self._sleep(wait)
+            send_headers = dict(headers)
+            if op.auth == "api_key" and self.auth is not None:
+                self.auth.apply(op.method, url, send_headers, content)
+            try:
+                resp = await self.http.request(op.method, url, params=params, content=content, headers=send_headers)
+            except httpx.TransportError as exc:
+                ambiguous = not isinstance(exc, _NOT_SENT)
+                reason = redact_text(f"{type(exc).__name__}: {exc}", self._secrets())
+                logger.debug("cexy: %s %s network error (attempt %d): %s", op.method, op.path, attempt, reason)
+                if attempt >= self.policy.max_retries:
+                    raise CexyConnectionError(f"{op.method} {op.path} failed: {reason}") from None
+                if ambiguous and recover is not None:
+                    recovered = await recover()
+                    if recovered is not None:
+                        return recovered
+                await self._sleep(self.policy.backoff(attempt))
+                attempt += 1
+                continue
+
+            resp_headers = lower_headers(resp.headers)
+            self.limiter.update_from_headers(resp_headers)
+            logger.debug("cexy: %s %s -> %d (attempt %d)", op.method, op.path, resp.status_code, attempt)
+            if resp.status_code < 400:
+                if raw:
+                    return resp.content
+                return resp.json()
+
+            err = from_response(resp.status_code, _json_or_none(resp), resp_headers, self._secrets())
+            if on_retry_error is not None and attempt > 0:
+                # An earlier attempt may have reached the server after all.
+                recovered = await on_retry_error(err)
+                if recovered is not None:
+                    return recovered
+            if attempt >= self.policy.max_retries or not self.policy.is_retryable(err):
+                raise err
+            if recover is not None and resp.status_code in _AMBIGUOUS_STATUS:
+                recovered = await recover()
+                if recovered is not None:
+                    return recovered
+            delay = self.policy.delay_for(err, attempt)
+            logger.debug("cexy: retrying %s %s after %s in %.2fs", op.method, op.path, err.code, delay)
+            await self._sleep(delay)
+            attempt += 1
+
+
+def _json_or_none(resp: httpx.Response) -> Any:
+    try:
+        return resp.json()
+    except ValueError:
+        return None
+
+
+__all__ = ["AUTO", "AsyncTransport", "CexyApiError"]
