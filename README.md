@@ -9,11 +9,12 @@ Typed Python client for the [CEXY.io](https://cexy.io) exchange REST and WebSock
 - WebSocket client with heartbeat, reconnect and a self-syncing order book
 
 > Status: **0.1.0.dev1, pre-release.** The API may change before 1.0 (see [Versioning](#versioning)).
+> Pre-releases need `--pre`: `pip install --pre cexy`.
 
 ## Install
 
 ```bash
-pip install cexy          # Python 3.9+
+pip install --pre cexy    # Python 3.9+ (--pre while releases are 0.1.0.devN)
 ```
 
 ## Quickstart: public market data
@@ -110,6 +111,7 @@ message.
 | `ValidationError` | 400, e.g. `VALIDATION_FAILED`, `PRECISION_EXCEEDED` (see `fields`) |
 | `AuthenticationError` | 401, e.g. `UNAUTHENTICATED`, `INVALID_CREDENTIALS` |
 | `ForbiddenError` | 403: `FORBIDDEN` (key lacks a scope), `API_KEY_NOT_ALLOWED` (session-only endpoint) |
+| `JurisdictionBlockedError` | 451: `JURISDICTION_BLOCKED` (not available in the caller's jurisdiction); a `ForbiddenError` subclass |
 | `NotFoundError` | 404 |
 | `ConflictError` | 409, e.g. `ALREADY_EXISTS`, `IDEMPOTENCY_KEY_CONFLICT` |
 | `UnprocessableError` | 422, e.g. `INSUFFICIENT_FUNDS`, `MARKET_UNAVAILABLE` |

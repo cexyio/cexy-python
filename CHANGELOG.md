@@ -3,7 +3,12 @@
 All notable changes to this project are documented here. The SDK stays at 0.x until API
 request signing (HMAC) ships; see "Versioning" in README.md.
 
-## 0.1.0.dev1 (unreleased)
+## Unreleased
+
+- `JurisdictionBlockedError` (a `ForbiddenError` subclass) for `JURISDICTION_BLOCKED` / HTTP 451.
+- README: pre-releases install with `pip install --pre cexy`.
+
+## 0.1.0.dev1 (2026-09-27)
 
 First published pre-release. 0.1.0.dev0 was tagged but never reached PyPI: the pinned publish
 action (v1.12.4, twine 6.1.0) rejected wheel metadata version 2.5. The publish action is now
