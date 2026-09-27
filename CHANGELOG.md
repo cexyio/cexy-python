@@ -3,7 +3,18 @@
 All notable changes to this project are documented here. The SDK stays at 0.x until API
 request signing (HMAC) ships; see "Versioning" in README.md.
 
-## 0.1.0.dev2 (unreleased)
+## 0.1.0.dev3 (unreleased)
+
+### Security
+- **Redirects are never followed**, including on a caller-supplied `http_client` created with
+  `follow_redirects=True`. Earlier versions set `follow_redirects=False` only on the client they
+  created themselves, so a caller's following client re-sent `X-API-Key` and `X-API-Secret` to a
+  redirect target (httpx strips only `Authorization`), and a 307/308 re-posted an order. A 3xx
+  was also treated as success. Every request now passes `follow_redirects=False`, and a 3xx
+  raises `CexyApiError` with code `UNEXPECTED_REDIRECT`, which is not retried. Upgrade from
+  0.1.0.dev2 or earlier if you pass your own `http_client`.
+
+## 0.1.0.dev2 (2026-09-27)
 
 - `JurisdictionBlockedError` (a `ForbiddenError` subclass) for `JURISDICTION_BLOCKED` / HTTP 451.
 - README: pre-releases install with `pip install --pre cexy` (the PyPI page for 0.1.0.dev1 still says `pip install cexy`, which does not install a pre-release).

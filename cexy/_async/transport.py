@@ -114,7 +114,12 @@ class AsyncTransport:
             if op.auth == "api_key" and self.auth is not None:
                 self.auth.apply(op.method, url, send_headers, content)
             try:
-                resp = await self.http.request(op.method, url, params=params, content=content, headers=send_headers)
+                # Never follow redirects, even on a caller-supplied client created with
+                # follow_redirects=True: httpx would re-send X-API-Key/X-API-Secret to the target
+                # (it strips only Authorization), and a 307/308 would re-POST an order.
+                resp = await self.http.request(
+                    op.method, url, params=params, content=content, headers=send_headers, follow_redirects=False
+                )
             except httpx.TransportError as exc:
                 ambiguous = not isinstance(exc, _NOT_SENT)
                 reason = redact_text(f"{type(exc).__name__}: {exc}", self._secrets())
@@ -132,6 +137,14 @@ class AsyncTransport:
             resp_headers = lower_headers(resp.headers)
             self.limiter.update_from_headers(resp_headers)
             logger.debug("cexy: %s %s -> %d (attempt %d)", op.method, op.path, resp.status_code, attempt)
+            if 300 <= resp.status_code < 400:
+                raise CexyApiError(
+                    "UNEXPECTED_REDIRECT",
+                    f"{op.method} {op.path}: the server answered with a redirect (HTTP {resp.status_code}); "
+                    "the SDK does not follow redirects. Check base_url.",
+                    status=resp.status_code,
+                    retryable=False,
+                )
             if resp.status_code < 400:
                 if raw:
                     return resp.content
