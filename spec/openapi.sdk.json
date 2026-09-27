@@ -1789,7 +1789,7 @@
           "trading"
         ],
         "summary": "Cancels every open order, optionally within one market.",
-        "description": "Best-effort: a failure on one order does not stop the rest, and both outcomes are reported. A panic-button endpoint that stops at the first problem is worse than useless.",
+        "description": "Best-effort: a failure on one order does not stop the rest, and every outcome is reported. A panic-button endpoint that stops at the first problem is worse than useless.\n\nAn order still being placed when the call starts (status `pending`, for as long as its own placement request runs) is waited for, up to 500 ms per call in total: cancelled if it opens, reported in `already_closed` if it fills or is refused, and in `failed` with code `INVALID_STATE` if it is still being placed at the deadline. Orders placed after the call starts are not part of it. At most 500 orders per call; `has_more` says there are others.\n\nLimited to 30 calls a minute per account, on top of the general request limit.",
         "operationId": "cancel_all",
         "requestBody": {
           "content": {
@@ -1816,6 +1816,26 @@
                       "$ref": "#/components/schemas/CancelAllResponse"
                     }
                   }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such market",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Over 30 calls a minute for this account; `details.retry_after_seconds` says when to retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -2910,12 +2930,22 @@
       },
       "CancelAllResponse": {
         "type": "object",
-        "description": "What a bulk cancellation achieved.",
+        "description": "What a bulk cancellation achieved.\n\nEvery order the call handled is in exactly one of `cancelled`, `already_closed` and `failed`.",
         "required": [
           "cancelled",
-          "failed"
+          "already_closed",
+          "failed",
+          "failures",
+          "has_more"
         ],
         "properties": {
+          "already_closed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Orders that closed on their own (filled, rejected, cancelled elsewhere) before this call reached them. Nothing was done to them, and they are not failures."
+          },
           "cancelled": {
             "type": "array",
             "items": {
@@ -2928,7 +2958,41 @@
             "items": {
               "type": "string"
             },
-            "description": "Orders that could not be cancelled. Each failure is logged server-side."
+            "description": "Orders that could not be cancelled in this call. Check `failures` for why, then refresh or call again."
+          },
+          "failures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CancelFailureResponse"
+            },
+            "description": "Why each order in `failed` could not be cancelled."
+          },
+          "has_more": {
+            "type": "boolean",
+            "description": "More open orders exist than one call handles (500). Call again."
+          }
+        }
+      },
+      "CancelFailureResponse": {
+        "type": "object",
+        "description": "Why one order could not be cancelled.",
+        "required": [
+          "order_id",
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The error code of the attempt, as in any error response: e.g. `INVALID_STATE` for an order still being placed when the wait ran out, or `MARKET_UNAVAILABLE`."
+          },
+          "message": {
+            "type": "string",
+            "description": "Its message."
+          },
+          "order_id": {
+            "type": "string",
+            "description": "The order."
           }
         }
       },

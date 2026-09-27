@@ -1,0 +1,329 @@
+{
+  "description": "Opt-in cancel-all loop (TS cancelAll({symbol, untilDone: true}), Python cancel_all(symbol, until_done=True), Go CancelAllUntilDone). Each case feeds the SDK a sequence of 200 responses from POST /api/v1/trading/orders/cancel-all (the `data` object only), in order. The runner uses a fake clock: calls take no time; the only time that passes is the loop's own sleeps. Rules: repeat while has_more is true or any failure code is INVALID_STATE or SERVICE_UNAVAILABLE. After a round with no progress (cancelled + already_closed empty), sleep 1, 2, 4, 8, then 15 s (cap) before the next call; reset after any progress; no sleep after a round with progress. Stop when done, after max_rounds calls (default 20), or when the next sleep would bring the elapsed time to or past time_budget_s (default 120). The result merges rounds by order_id; an order's latest state wins (a later cancelled/already_closed removes an earlier failure). Other failure codes are returned, never a reason to continue. Order-id lists compare as sets; `stopped` is done | max_rounds | time_budget; `failure_codes` maps each still-failed order to its code. 429 and transport errors are retried by the normal transport rules and are not part of these cases.",
+  "cases": [
+    {
+      "id": "single_round_done",
+      "responses": [
+        {
+          "cancelled": [
+            "o1",
+            "o2"
+          ],
+          "already_closed": [
+            "o3"
+          ],
+          "failed": [],
+          "failures": [],
+          "has_more": false
+        }
+      ],
+      "expect": {
+        "calls": 1,
+        "sleeps_s": [],
+        "stopped": "done",
+        "cancelled": [
+          "o1",
+          "o2"
+        ],
+        "already_closed": [
+          "o3"
+        ],
+        "failed": [],
+        "failure_codes": {}
+      }
+    },
+    {
+      "id": "has_more_pages_through_without_sleeping",
+      "responses": [
+        {
+          "cancelled": [
+            "o1"
+          ],
+          "already_closed": [],
+          "failed": [],
+          "failures": [],
+          "has_more": true
+        },
+        {
+          "cancelled": [
+            "o2"
+          ],
+          "already_closed": [],
+          "failed": [],
+          "failures": [],
+          "has_more": false
+        }
+      ],
+      "expect": {
+        "calls": 2,
+        "sleeps_s": [],
+        "stopped": "done",
+        "cancelled": [
+          "o1",
+          "o2"
+        ],
+        "already_closed": [],
+        "failed": [],
+        "failure_codes": {}
+      }
+    },
+    {
+      "id": "pending_orders_back_off_then_resolve",
+      "responses": [
+        {
+          "cancelled": [],
+          "already_closed": [],
+          "failed": [
+            "p1",
+            "p2"
+          ],
+          "has_more": false,
+          "failures": [
+            {
+              "order_id": "p1",
+              "code": "INVALID_STATE",
+              "message": "still being placed"
+            },
+            {
+              "order_id": "p2",
+              "code": "INVALID_STATE",
+              "message": "still being placed"
+            }
+          ]
+        },
+        {
+          "cancelled": [],
+          "already_closed": [],
+          "failed": [
+            "p1",
+            "p2"
+          ],
+          "has_more": false,
+          "failures": [
+            {
+              "order_id": "p1",
+              "code": "INVALID_STATE",
+              "message": "still being placed"
+            },
+            {
+              "order_id": "p2",
+              "code": "INVALID_STATE",
+              "message": "still being placed"
+            }
+          ]
+        },
+        {
+          "cancelled": [
+            "p1"
+          ],
+          "already_closed": [
+            "p2"
+          ],
+          "failed": [],
+          "failures": [],
+          "has_more": false
+        }
+      ],
+      "expect": {
+        "calls": 3,
+        "sleeps_s": [
+          1,
+          2
+        ],
+        "stopped": "done",
+        "cancelled": [
+          "p1"
+        ],
+        "already_closed": [
+          "p2"
+        ],
+        "failed": [],
+        "failure_codes": {}
+      }
+    },
+    {
+      "id": "backoff_resets_after_progress",
+      "responses": [
+        {
+          "cancelled": [],
+          "already_closed": [],
+          "failed": [
+            "p1"
+          ],
+          "has_more": true,
+          "failures": [
+            {
+              "order_id": "p1",
+              "code": "INVALID_STATE",
+              "message": "still being placed"
+            }
+          ]
+        },
+        {
+          "cancelled": [
+            "o1"
+          ],
+          "already_closed": [],
+          "failed": [
+            "p1"
+          ],
+          "has_more": true,
+          "failures": [
+            {
+              "order_id": "p1",
+              "code": "INVALID_STATE",
+              "message": "still being placed"
+            }
+          ]
+        },
+        {
+          "cancelled": [],
+          "already_closed": [],
+          "failed": [
+            "p1"
+          ],
+          "has_more": false,
+          "failures": [
+            {
+              "order_id": "p1",
+              "code": "SERVICE_UNAVAILABLE",
+              "message": "state unavailable"
+            }
+          ]
+        },
+        {
+          "cancelled": [
+            "p1"
+          ],
+          "already_closed": [],
+          "failed": [],
+          "failures": [],
+          "has_more": false
+        }
+      ],
+      "expect": {
+        "calls": 4,
+        "sleeps_s": [
+          1,
+          1
+        ],
+        "stopped": "done",
+        "cancelled": [
+          "o1",
+          "p1"
+        ],
+        "already_closed": [],
+        "failed": [],
+        "failure_codes": {}
+      }
+    },
+    {
+      "id": "other_failure_codes_are_returned_not_retried",
+      "responses": [
+        {
+          "cancelled": [
+            "o1"
+          ],
+          "already_closed": [],
+          "failed": [
+            "o2"
+          ],
+          "has_more": false,
+          "failures": [
+            {
+              "order_id": "o2",
+              "code": "MARKET_UNAVAILABLE",
+              "message": "market halted"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "calls": 1,
+        "sleeps_s": [],
+        "stopped": "done",
+        "cancelled": [
+          "o1"
+        ],
+        "already_closed": [],
+        "failed": [
+          "o2"
+        ],
+        "failure_codes": {
+          "o2": "MARKET_UNAVAILABLE"
+        }
+      }
+    },
+    {
+      "id": "stuck_until_time_budget",
+      "options": {
+        "time_budget_s": 30
+      },
+      "responses_repeat_last": true,
+      "responses": [
+        {
+          "cancelled": [],
+          "already_closed": [],
+          "failed": [
+            "p1"
+          ],
+          "has_more": false,
+          "failures": [
+            {
+              "order_id": "p1",
+              "code": "INVALID_STATE",
+              "message": "still being placed"
+            }
+          ]
+        }
+      ],
+      "expect": {
+        "calls": 5,
+        "sleeps_s": [
+          1,
+          2,
+          4,
+          8
+        ],
+        "stopped": "time_budget",
+        "cancelled": [],
+        "already_closed": [],
+        "failed": [
+          "p1"
+        ],
+        "failure_codes": {
+          "p1": "INVALID_STATE"
+        }
+      }
+    },
+    {
+      "id": "max_rounds",
+      "options": {
+        "max_rounds": 3
+      },
+      "responses_repeat_last": true,
+      "responses": [
+        {
+          "cancelled": [
+            "x"
+          ],
+          "already_closed": [],
+          "failed": [],
+          "failures": [],
+          "has_more": true
+        }
+      ],
+      "expect": {
+        "calls": 3,
+        "sleeps_s": [],
+        "stopped": "max_rounds",
+        "cancelled": [
+          "x"
+        ],
+        "already_closed": [],
+        "failed": [],
+        "failure_codes": {}
+      }
+    }
+  ]
+}
