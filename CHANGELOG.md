@@ -3,10 +3,11 @@
 All notable changes to this project are documented here. The SDK stays at 0.x until API
 request signing (HMAC) ships; see "Versioning" in README.md.
 
-## Unreleased
+## 0.1.0.dev2 (unreleased)
 
 - `JurisdictionBlockedError` (a `ForbiddenError` subclass) for `JURISDICTION_BLOCKED` / HTTP 451.
-- README: pre-releases install with `pip install --pre cexy`.
+- README: pre-releases install with `pip install --pre cexy` (the PyPI page for 0.1.0.dev1 still says `pip install cexy`, which does not install a pre-release).
+- `spec/errors.yaml` is now generated upstream from the spec's `ErrorCode` (same 44 codes).
 
 ## 0.1.0.dev1 (2026-09-27)
 
