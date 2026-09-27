@@ -8,7 +8,7 @@ Typed Python client for the [CEXY.io](https://cexy.io) exchange REST and WebSock
 - Client-side rate limiting, cursor pagination
 - WebSocket client with heartbeat, reconnect and a self-syncing order book
 
-> Status: **0.1.0.dev2, pre-release.** The API may change before 1.0 (see [Versioning](#versioning)).
+> Status: **0.1.0.dev3, pre-release.** The API may change before 1.0 (see [Versioning](#versioning)).
 > Pre-releases need `--pre`: `pip install --pre cexy`.
 
 ## Install
@@ -249,6 +249,9 @@ client emits `auth_lost`; the socket stays open for public channels.
 - The SDK redacts keys from `repr()`, logs and exception messages, and never sends an
   `Authorization` header. If a server response echoes the key or secret, it is replaced
   with `***` in the exception's message, details, fields and request id.
+- The SDK **never follows HTTP redirects**, even on an `http_client` you created with
+  `follow_redirects=True`. A 3xx answer raises `CexyApiError` with code `UNEXPECTED_REDIRECT`
+  (not retried), so keys are never re-sent to another host and an order is never re-posted.
 - Connections use `https://` and `wss://` only. `allow_insecure=True` permits `http://` or
   `ws://` for a loopback host (localhost, 127.0.0.1, ::1) only, for local testing.
 - Report vulnerabilities as described in [SECURITY.md](SECURITY.md).
