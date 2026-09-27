@@ -3,7 +3,13 @@
 All notable changes to this project are documented here. The SDK stays at 0.x until API
 request signing (HMAC) ships; see "Versioning" in README.md.
 
-## 0.1.0.dev0 (unreleased)
+## 0.1.0.dev1 (unreleased)
+
+First published pre-release. 0.1.0.dev0 was tagged but never reached PyPI: the pinned publish
+action (v1.12.4, twine 6.1.0) rejected wheel metadata version 2.5. The publish action is now
+v1.14.2 (twine 7.0.0), and the build job runs `twine check --strict` with the same twine.
+
+## 0.1.0.dev0 (not published)
 
 Built from the `cexy-api-spec` snapshot (implementation notes stripped from descriptions) `spec/openapi.sdk.json` (public spec `info.version`
 1.0.0, 40 allowlisted operations).

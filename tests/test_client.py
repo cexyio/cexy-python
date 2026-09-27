@@ -8,8 +8,8 @@ from tests.conftest import BASE, KEY, SECRET
 
 
 def test_version() -> None:
-    assert cexy.__version__ == "0.1.0.dev0"
-    assert cexy.USER_AGENT == "cexy-python/0.1.0.dev0"
+    assert cexy.__version__ == "0.1.0.dev1"
+    assert cexy.USER_AGENT == "cexy-python/0.1.0.dev1"
 
 
 @pytest.mark.parametrize(
