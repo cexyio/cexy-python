@@ -8,7 +8,7 @@ Typed Python client for the [CEXY.io](https://cexy.io) exchange REST and WebSock
 - Client-side rate limiting, cursor pagination
 - WebSocket client with heartbeat, reconnect and a self-syncing order book
 
-> Status: **0.1.0.dev1, pre-release.** The API may change before 1.0 (see [Versioning](#versioning)).
+> Status: **0.1.0.dev2, pre-release.** The API may change before 1.0 (see [Versioning](#versioning)).
 > Pre-releases need `--pre`: `pip install --pre cexy`.
 
 ## Install
