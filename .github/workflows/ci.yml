@@ -13,6 +13,7 @@ jobs:
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with: {python-version: "${{ matrix.python-version }}"}
       - run: pip install -e ".[dev]"
@@ -24,6 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with: {python-version: "3.12"}
       - run: pip install -e ".[dev]"
@@ -36,6 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with: {python-version: "3.12"}
       - run: pip install -e ".[dev,codegen]"
@@ -44,7 +47,7 @@ jobs:
         run: git diff --exit-code -- cexy/
       - name: Check out cexy-api-spec
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: {repository: cexyio/cexy-api-spec, path: .cexy-api-spec}
+        with: {repository: cexyio/cexy-api-spec, path: .cexy-api-spec, persist-credentials: false}
       - name: Vendored spec, conformance fixtures and scanner match cexy-api-spec
         run: |
           scripts/sync_spec.sh .cexy-api-spec --check
@@ -54,6 +57,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with: {python-version: "3.12"}
       - name: No internal references
