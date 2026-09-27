@@ -81,6 +81,13 @@ class ForbiddenError(CexyApiError):
     (``API_KEY_NOT_ALLOWED``), or the account/region is restricted."""
 
 
+class JurisdictionBlockedError(ForbiddenError):
+    """451: the service is not available in the caller's jurisdiction (``JURISDICTION_BLOCKED``).
+
+    A subclass of :class:`ForbiddenError`, so existing ``except ForbiddenError`` handlers still
+    catch it; catch it directly to show a dedicated message. Retrying will not help."""
+
+
 class ValidationError(CexyApiError):
     """400: the request failed validation. ``fields`` maps field names to problems."""
 
@@ -139,8 +146,8 @@ for _cls, _codes in {
         "ACCOUNT_ON_HOLD",
         "EMAIL_NOT_VERIFIED",
         "REGION_BLOCKED",
-        "JURISDICTION_BLOCKED",  # HTTP 451
     ),
+    JurisdictionBlockedError: ("JURISDICTION_BLOCKED",),
     NotFoundError: ("NOT_FOUND",),
     ConflictError: (
         "ALREADY_EXISTS",
@@ -170,7 +177,7 @@ _BY_STATUS: Dict[int, Type[CexyApiError]] = {
     400: ValidationError,
     401: AuthenticationError,
     403: ForbiddenError,
-    451: ForbiddenError,  # unavailable for legal reasons (JURISDICTION_BLOCKED)
+    451: JurisdictionBlockedError,  # unavailable for legal reasons
     404: NotFoundError,
     409: ConflictError,
     422: UnprocessableError,

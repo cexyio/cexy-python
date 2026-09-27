@@ -162,4 +162,6 @@ def test_every_spec_error_code_maps_to_a_class() -> None:
     codes = spec["components"]["schemas"]["ErrorCode"]["enum"]
     assert set(codes) <= errors.KNOWN_ERROR_CODES
     err = errors.from_response(451, {"error": {"code": "JURISDICTION_BLOCKED", "message": "x", "retryable": False}}, {})
-    assert isinstance(err, errors.ForbiddenError)
+    assert type(err) is errors.JurisdictionBlockedError
+    assert isinstance(err, errors.ForbiddenError)  # existing ForbiddenError handlers still catch it
+    assert cexy.JurisdictionBlockedError is errors.JurisdictionBlockedError
