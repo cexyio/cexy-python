@@ -3,7 +3,24 @@
 All notable changes to this project are documented here. The SDK stays at 0.x until API
 request signing (HMAC) ships; see "Versioning" in README.md.
 
-## 0.1.0.dev4 (unreleased)
+## 0.1.0.dev5 (unreleased)
+
+### Fixed
+- **Server-controlled waits are bounded.** `Retry-After` (seconds or HTTP-date),
+  `details.retry_after_seconds` and `X-RateLimit-Reset` are treated as untrusted: unparseable,
+  negative or non-finite values are ignored instead of raising, and a requested wait above 120 s is
+  no longer taken (earlier versions waited up to 60 s and retried): the call raises `RateLimitError`
+  at once, with `.retry_after` giving the server's value. The client-side rate limiter never blocks
+  longer than 120 s because of a server header, ignores negative or non-finite counts, and no longer
+  loses tokens when its clock goes backwards. Retry-After HTTP-dates are now understood.
+- **`cancel_all(until_done=True)` owns its retries.** Each round is exactly one HTTP request:
+  earlier versions let the transport retry inside a round, so 20 rounds could send up to 80
+  requests. A retryable error (429, 5xx, network) is now a round without progress; a 429 waits the
+  server's Retry-After exactly and a wait past `time_budget` is not taken. New
+  `CancelAllResult.last_error_code`; a non-retryable error is raised with the merged result so far
+  in `err.partial`.
+
+## 0.1.0.dev4 (2026-09-27)
 
 ### Added
 - `cancel_all` follows the API's cancel-all update (backend release 4d1b7f2): the response adds

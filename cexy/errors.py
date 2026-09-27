@@ -11,6 +11,9 @@ crash the client.
 
 from __future__ import annotations
 
+import email.utils
+import math
+import time
 from typing import Any, Dict, Mapping, Optional, Sequence, Type
 
 from cexy._generated.models import ErrorCode
@@ -197,18 +200,44 @@ def error_class_for(code: str, status: int) -> Type[CexyApiError]:
     return CexyApiError
 
 
+def _parse_retry_after_header(raw: Any) -> Optional[float]:
+    """Seconds from a ``Retry-After`` value (delta-seconds or an HTTP-date). Untrusted input:
+    anything unparseable, negative or non-finite gives None; a date in the past gives 0."""
+    if not isinstance(raw, str):
+        return None
+    v = raw.strip()
+    try:
+        x = float(v)
+    except ValueError:
+        try:
+            dt = email.utils.parsedate_to_datetime(v)
+            x = max(0.0, dt.timestamp() - time.time()) if dt is not None else float("nan")
+        except (TypeError, ValueError, IndexError, OverflowError, OSError):
+            return None
+    return x if math.isfinite(x) and x >= 0 else None
+
+
 def retry_after_seconds(headers: Mapping[str, str], details: Mapping[str, Any]) -> Optional[float]:
-    """The larger of the ``Retry-After`` header and ``details.retry_after_seconds``."""
+    """The larger of the ``Retry-After`` header and ``details.retry_after_seconds``.
+
+    Both come from the server and are untrusted: values that are unparseable, negative or not
+    finite are ignored, and the result may be arbitrarily large. The transport never waits
+    longer than ``MAX_SERVER_WAIT_S`` (120 s); above that the call fails at once.
+    """
     values = []
     for k, v in headers.items():
         if k.lower() == "retry-after":
-            try:
-                values.append(float(v))
-            except ValueError:
-                pass
-    d = details.get("retry_after_seconds")
+            x = _parse_retry_after_header(v)
+            if x is not None:
+                values.append(x)
+    d = details.get("retry_after_seconds") if isinstance(details, Mapping) else None
     if isinstance(d, (int, float)) and not isinstance(d, bool):
-        values.append(float(d))
+        try:
+            f = float(d)
+        except OverflowError:  # an int too large for a float
+            f = math.inf
+        if math.isfinite(f) and f >= 0:
+            values.append(f)
     return max(values) if values else None
 
 

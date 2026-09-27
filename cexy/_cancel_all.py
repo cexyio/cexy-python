@@ -3,26 +3,32 @@
 The rules follow ``tests/fixtures/conformance/trading/cancel_all_until_done.json`` (from
 cexy-api-spec), which every SDK implements:
 
+- every round is exactly ONE HTTP request: the transport does not retry inside the loop, so
+  the loop never sends more than ``max_rounds`` requests;
 - repeat while ``has_more`` is true or any failure code is ``INVALID_STATE`` or
   ``SERVICE_UNAVAILABLE`` (an order still being placed, or its state unreadable);
 - after a round that made no progress (nothing cancelled or already closed), sleep 1, 2, 4, 8,
   then 15 s before the next call; reset after any progress; no sleep after progress;
-- stop when done, after ``max_rounds`` calls, or when the next sleep would bring the elapsed
-  time to or past ``time_budget`` seconds; transport retry waits (e.g. a 429's Retry-After)
-  count against the budget, and a retry that would pass it is not attempted;
+- a retryable error (429, a retryable 5xx, a network failure) is a round without progress:
+  after a 429 the loop waits the server's Retry-After exactly, without advancing the backoff;
+  after any other retryable error it waits the next backoff step;
+- stop when done, after ``max_rounds`` calls, or when the next wait would bring the elapsed
+  time to or past ``time_budget`` seconds (that wait is not taken; ``last_error_code`` names
+  the error that caused it, if any);
+- a non-retryable error is raised, with the merged result so far attached as ``.partial``;
 - merge the rounds by order id: an order's latest state wins.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Literal, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 from cexy._generated import models as m
 
 RETRY_CODES = frozenset({"INVALID_STATE", "SERVICE_UNAVAILABLE"})
 BACKOFF_S: Tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 15.0)
-Stopped = Literal["done", "max_rounds", "time_budget"]
+Stopped = Literal["done", "max_rounds", "time_budget", "error"]
 
 
 @dataclass
@@ -31,8 +37,10 @@ class CancelAllResult:
 
     Every order the calls handled is in exactly one of ``cancelled``, ``already_closed`` and
     ``failed`` (its latest state). ``failures`` explains each order still in ``failed``.
-    ``stopped`` is ``"done"``, ``"max_rounds"`` or ``"time_budget"``; ``has_more`` is the last
-    call's value (true means open orders may remain: call again later).
+    ``stopped`` is ``"done"``, ``"max_rounds"`` or ``"time_budget"`` (``"error"`` only on the
+    ``.partial`` result attached to a raised error); ``has_more`` is the last successful call's
+    value (true means open orders may remain: call again later). ``last_error_code`` is the
+    code of the error in the last round, if that round failed (e.g. ``RATE_LIMITED``).
     """
 
     cancelled: List[str] = field(default_factory=list)
@@ -42,6 +50,7 @@ class CancelAllResult:
     has_more: bool = False
     rounds: int = 0
     stopped: Stopped = "done"
+    last_error_code: Optional[str] = None
 
     @property
     def complete(self) -> bool:
@@ -76,7 +85,7 @@ class _Merge:
     def _pick(self, state: str) -> List[str]:
         return [o for o, st in self.state.items() if st == state]
 
-    def result(self, rounds: int, stopped: Stopped) -> CancelAllResult:
+    def result(self, rounds: int, stopped: Stopped, last_error_code: Optional[str] = None) -> CancelAllResult:
         failed = self._pick("failed")
         return CancelAllResult(
             cancelled=self._pick("cancelled"),
@@ -86,6 +95,7 @@ class _Merge:
             has_more=self.has_more,
             rounds=rounds,
             stopped=stopped,
+            last_error_code=last_error_code,
         )
 
 

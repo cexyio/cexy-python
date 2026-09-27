@@ -4,14 +4,20 @@ The client picks 100 requests/minute without a key (the server allows about 120/
 per IP for anonymous requests) and 300/min with a key (about 600/min per key). When the
 server sends ``X-RateLimit-Remaining`` / ``X-RateLimit-Reset``, the bucket adapts: it
 never holds more tokens than the server says remain, and when the server says zero
-remain it waits until the reset.
+remain it waits until the reset. Server headers are untrusted: unusable values are ignored and
+no wait exceeds 120 s.
 """
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from typing import Callable, Mapping, Optional
+
+#: The limiter never blocks longer than this because of a server hint (same as the transport's
+#: MAX_SERVER_WAIT_S).
+MAX_WAIT_S = 120.0
 
 
 class TokenBucket:
@@ -32,7 +38,8 @@ class TokenBucket:
         self._lock = threading.Lock()
 
     def _refill(self, now: float) -> None:
-        self.tokens = min(self.capacity, self.tokens + (now - self._last) * self.rate)
+        # A clock that moved backwards (or was swapped) refills nothing.
+        self.tokens = min(self.capacity, self.tokens + max(0.0, now - self._last) * self.rate)
         self._last = now
 
     def acquire(self) -> float:
@@ -44,15 +51,18 @@ class TokenBucket:
             self.tokens -= 1.0
             if self.tokens < 0:
                 wait = max(wait, -self.tokens / self.rate)
-            return wait
+            return min(wait, MAX_WAIT_S)
 
     def update_from_headers(self, headers: Mapping[str, str]) -> None:
         """Adapt to ``X-RateLimit-Remaining`` and ``X-RateLimit-Reset`` (case-insensitive keys)."""
         low = {k.lower(): v for k, v in headers.items()}
         try:
             remaining = float(low["x-ratelimit-remaining"])
-        except (KeyError, ValueError):
+        except (KeyError, ValueError, TypeError):
             return
+        if not math.isfinite(remaining):
+            return
+        remaining = max(0.0, remaining)  # untrusted: a negative count would block for ever
         reset = self._reset_delay(low.get("x-ratelimit-reset"))
         with self._lock:
             now = self._clock()
@@ -67,6 +77,8 @@ class TokenBucket:
             return None
         try:
             value = float(raw)
-        except ValueError:
+        except (ValueError, TypeError):
             return None
-        return max(0.0, min(value, 120.0))
+        if not math.isfinite(value) or value < 0:
+            return None
+        return min(value, MAX_WAIT_S)

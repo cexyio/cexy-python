@@ -1,0 +1,142 @@
+{
+  "description": "Server-controlled waits (all SDKs, REST). Retry-After (seconds or HTTP-date), details.retry_after_seconds and X-RateLimit-Reset are untrusted: an SDK must never panic, overflow or hang on them. Rules: a missing, unparseable, negative, non-finite or absurd value is ignored (the normal backoff applies). A usable value above MAX_SERVER_WAIT_S (120) is NOT waited: the call fails at once with the rate-limit error, which still exposes the server's value. The client-side rate limiter never blocks longer than MAX_SERVER_WAIT_S because of a server hint. Each case is one GET /api/v1/time with the SDK's default retries (3); `responses` are served in order (the last repeats); the runner records sleeps with a fake clock. SDKs may add up to 1 s of jitter to a Retry-After wait, so waits compare within [expected, expected + 1].",
+  "max_server_wait_s": 120,
+  "cases": [
+    {
+      "id": "short_retry_after_is_honoured",
+      "responses": [
+        {
+          "http_status": 429,
+          "headers": {
+            "Retry-After": "5"
+          },
+          "error": {
+            "code": "RATE_LIMITED",
+            "message": "x",
+            "retryable": true
+          }
+        },
+        {
+          "http_status": 200,
+          "body": {
+            "data": {
+              "epoch_ms": 1,
+              "iso": "1970-01-01T00:00:00.001Z"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "calls": 2,
+        "sleeps_s": [
+          5
+        ],
+        "ok": true
+      }
+    },
+    {
+      "id": "huge_retry_after_fails_fast",
+      "responses": [
+        {
+          "http_status": 429,
+          "headers": {
+            "Retry-After": "86400"
+          },
+          "error": {
+            "code": "RATE_LIMITED",
+            "message": "x",
+            "retryable": true,
+            "details": {
+              "retry_after_seconds": 86400
+            }
+          }
+        }
+      ],
+      "expect": {
+        "calls": 1,
+        "sleeps_s": [],
+        "error_code": "RATE_LIMITED",
+        "retry_after_s": 86400
+      }
+    },
+    {
+      "id": "absurd_retry_after_does_not_panic",
+      "responses": [
+        {
+          "http_status": 429,
+          "headers": {
+            "Retry-After": "1e309"
+          },
+          "error": {
+            "code": "RATE_LIMITED",
+            "message": "x",
+            "retryable": true,
+            "details": {
+              "retry_after_seconds": 1e+300
+            }
+          }
+        }
+      ],
+      "expect": {
+        "calls": 1,
+        "error_code": "RATE_LIMITED",
+        "no_sleep_longer_than_s": 120
+      }
+    },
+    {
+      "id": "garbage_retry_after_falls_back_to_backoff",
+      "responses": [
+        {
+          "http_status": 503,
+          "headers": {
+            "Retry-After": "soon"
+          },
+          "error": {
+            "code": "SERVICE_UNAVAILABLE",
+            "message": "x",
+            "retryable": true
+          }
+        },
+        {
+          "http_status": 200,
+          "body": {
+            "data": {
+              "epoch_ms": 1,
+              "iso": "1970-01-01T00:00:00.001Z"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "calls": 2,
+        "ok": true,
+        "no_sleep_longer_than_s": 10
+      }
+    },
+    {
+      "id": "huge_rate_limit_reset_does_not_block_the_limiter",
+      "responses": [
+        {
+          "http_status": 200,
+          "headers": {
+            "X-RateLimit-Limit": "1",
+            "X-RateLimit-Remaining": "0",
+            "X-RateLimit-Reset": "9999999999"
+          },
+          "body": {
+            "data": {
+              "epoch_ms": 1,
+              "iso": "1970-01-01T00:00:00.001Z"
+            }
+          }
+        }
+      ],
+      "then_calls": 1,
+      "expect": {
+        "calls": 2,
+        "ok": true,
+        "no_sleep_longer_than_s": 120
+      }
+    }
+  ]
+}
