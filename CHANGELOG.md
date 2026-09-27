@@ -3,7 +3,25 @@
 All notable changes to this project are documented here. The SDK stays at 0.x until API
 request signing (HMAC) ships; see "Versioning" in README.md.
 
-## 0.1.0.dev3 (unreleased)
+## 0.1.0.dev4 (unreleased)
+
+### Added
+- `cancel_all` follows the API's cancel-all update (backend release 4d1b7f2): the response adds
+  `already_closed` (orders that closed on their own; not an error), `failures` (`order_id`,
+  `code`, `message` per failed order) and `has_more` (more than 500 open orders: call again).
+  An unknown `symbol` raises `NotFoundError`; the 30-calls-a-minute limit raises `RateLimitError`.
+- `cancel_all(symbol=..., until_done=True, max_rounds=20, time_budget=120.0)`: repeats the call
+  while `has_more` or while orders are still being placed (`INVALID_STATE`) or unreadable
+  (`SERVICE_UNAVAILABLE`), backs off 1-2-4-8-15 s after rounds without progress, honours a
+  429's `Retry-After` within the budget, and returns a merged `CancelAllResult` (`rounds`,
+  `stopped`). Implements the shared `conformance/trading/cancel_all_until_done.json` cases. The
+  default stays a single call.
+
+### Changed
+- The transport accepts a `deadline`: a retry whose wait (the server's full Retry-After) would
+  reach it is not attempted.
+
+## 0.1.0.dev3 (2026-09-27)
 
 ### Security
 - **Redirects are never followed**, including on a caller-supplied `http_client` created with

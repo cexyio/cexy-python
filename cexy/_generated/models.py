@@ -72,19 +72,22 @@ class CancelAllRequest(BaseModel):
     ] = None
 
 
-class CancelAllResponse(BaseModel):
+class CancelFailureResponse(BaseModel):
     """
-    What a bulk cancellation achieved.
+    Why one order could not be cancelled.
     """
 
     model_config = ConfigDict(
         extra="allow",
     )
-    cancelled: Annotated[List[str], Field(description="Orders cancelled.")]
-    failed: Annotated[
-        List[str],
-        Field(description="Orders that could not be cancelled. Each failure is logged server-side."),
+    code: Annotated[
+        str,
+        Field(
+            description="The error code of the attempt, as in any error response: e.g. `INVALID_STATE` for an order still being placed when the wait ran out, or `MARKET_UNAVAILABLE`."
+        ),
     ]
+    message: Annotated[str, Field(description="Its message.")]
+    order_id: Annotated[str, Field(description="The order.")]
 
 
 class CandleInterval(OpenEnum):
@@ -961,6 +964,39 @@ class AssetResponse(BaseModel):
         ),
     ]
     website_url: Annotated[Optional[str], Field(description="Project website.")] = None
+
+
+class CancelAllResponse(BaseModel):
+    """
+    What a bulk cancellation achieved.
+
+    Every order the call handled is in exactly one of `cancelled`, `already_closed` and `failed`.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    already_closed: Annotated[
+        List[str],
+        Field(
+            description="Orders that closed on their own (filled, rejected, cancelled elsewhere) before this call reached them. Nothing was done to them, and they are not failures."
+        ),
+    ]
+    cancelled: Annotated[List[str], Field(description="Orders cancelled.")]
+    failed: Annotated[
+        List[str],
+        Field(
+            description="Orders that could not be cancelled in this call. Check `failures` for why, then refresh or call again."
+        ),
+    ]
+    failures: Annotated[
+        List[CancelFailureResponse],
+        Field(description="Why each order in `failed` could not be cancelled."),
+    ]
+    has_more: Annotated[
+        bool,
+        Field(description="More open orders exist than one call handles (500). Call again."),
+    ]
 
 
 class DepositResponse(BaseModel):

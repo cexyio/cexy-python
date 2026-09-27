@@ -8,7 +8,7 @@ Typed Python client for the [CEXY.io](https://cexy.io) exchange REST and WebSock
 - Client-side rate limiting, cursor pagination
 - WebSocket client with heartbeat, reconnect and a self-syncing order book
 
-> Status: **0.1.0.dev3, pre-release.** The API may change before 1.0 (see [Versioning](#versioning)).
+> Status: **0.1.0.dev4, pre-release.** The API may change before 1.0 (see [Versioning](#versioning)).
 > Pre-releases need `--pre`: `pip install --pre cexy`.
 
 ## Install
@@ -80,6 +80,21 @@ for an asset/network pair, then returns the same address on later calls.
 
 `cancel_all` requires the `symbol` keyword; pass `symbol=None` explicitly to cancel orders
 in every market. The server allows 30 cancel-all calls per minute per account.
+
+One `cancel_all` call handles at most 500 orders and waits up to 500 ms for orders still being
+placed. The result lists `cancelled`, `already_closed` (orders that closed on their own; not an
+error) and `failed`, with a reason per order in `failures`; `has_more=True` means call again.
+The server allows 30 calls a minute per account. To keep going until nothing is left, opt in:
+
+```python
+res = client.trading.cancel_all(symbol=None, until_done=True)   # max_rounds=20, time_budget=120.0
+res.cancelled, res.already_closed, res.failed, res.failures      # merged: each order's latest state
+res.stopped                                                      # "done", "max_rounds" or "time_budget"
+```
+
+The loop repeats while `has_more` is true or an order is still being placed (`INVALID_STATE`) or
+unreadable (`SERVICE_UNAVAILABLE`), waits 1, 2, 4, 8, then 15 s after a round without progress,
+and honours a 429's `Retry-After` within the time budget.
 
 The async client has the same methods:
 

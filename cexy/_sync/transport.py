@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from time import monotonic as _monotonic
 from typing import Any, Callable, Dict, Mapping, Optional
 
 import httpx
@@ -31,6 +32,7 @@ from cexy.errors import (
     CexyConnectionError,
     MissingCredentialsError,
     from_response,
+    retry_after_seconds,
 )
 
 logger = logging.getLogger("cexy")
@@ -61,6 +63,7 @@ class SyncTransport:
         self._owns_http = http_client is None
         self.http = http_client or httpx.Client(timeout=timeout, follow_redirects=False)
         self._sleep = time.sleep
+        self._clock = _monotonic  # injectable for tests (cancel_all until_done time budget)
 
     def _secrets(self) -> tuple[str, ...]:
         return self.auth.secrets() if self.auth is not None else ()
@@ -80,6 +83,7 @@ class SyncTransport:
         raw: bool = False,
         recover: Optional[Callable[[], Any]] = None,
         on_retry_error: Optional[Callable[[CexyApiError], Any]] = None,
+        deadline: Optional[float] = None,
     ) -> Any:
         """Send one logical request, retrying where that is safe.
 
@@ -91,6 +95,8 @@ class SyncTransport:
         fails, because an earlier attempt may have succeeded (e.g. a repeated order is
         refused as a duplicate, a repeated cancel as INVALID_STATE). A non-None result is
         returned instead of raising.
+        ``deadline``: a ``self._clock()`` value; a retry whose wait would reach it is not
+        attempted and the error is raised instead (used by ``cancel_all(until_done=True)``).
         """
         op = operation(op_id)
         url = self.base_url + build_path(op, path)
@@ -165,6 +171,11 @@ class SyncTransport:
                 if recovered is not None:
                     return recovered
             delay = self.policy.delay_for(err, attempt)
+            if deadline is not None:
+                # The server's full requested wait counts, even where the retry wait is capped.
+                asked = retry_after_seconds(err.headers, err.details) or 0.0
+                if self._clock() + max(delay, asked) >= deadline:
+                    raise err
             logger.debug("cexy: retrying %s %s after %s in %.2fs", op.method, op.path, err.code, delay)
             self._sleep(delay)
             attempt += 1

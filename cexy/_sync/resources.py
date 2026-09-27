@@ -11,15 +11,16 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, List, Optional, Union
+from typing import Any, List, Literal, Optional, Union, overload
 
+from cexy._cancel_all import CancelAllResult, _Merge, made_progress, next_backoff, should_continue
 from cexy._common import AUTO
 from cexy._decimal import DecimalLike, to_wire, to_wire_opt
 from cexy._generated import models as m
 from cexy._opmap import operation
 from cexy._sync.pagination import Page
 from cexy._sync.transport import SyncTransport
-from cexy.errors import CexyApiError, NotFoundError
+from cexy.errors import CexyApiError, NotFoundError, RateLimitError
 
 DateLike = Union[datetime, str]
 Direction = Union[m.SortDirection, str]
@@ -461,16 +462,74 @@ class Trading(_Resource):
         payload = self._t.request("cancel_order", path={"order_id": order_id}, on_retry_error=on_retry_error)
         return m.OrderResponse.model_validate(_data(payload))
 
+    @overload
+    def cancel_all(self, *, symbol: Optional[str], until_done: Literal[False] = ...) -> m.CancelAllResponse: ...
+
+    @overload
+    def cancel_all(
+        self, *, symbol: Optional[str], until_done: Literal[True], max_rounds: int = ..., time_budget: float = ...
+    ) -> CancelAllResult: ...
+
     @operation("cancel_all")
-    def cancel_all(self, *, symbol: Optional[str]) -> m.CancelAllResponse:
+    def cancel_all(
+        self,
+        *,
+        symbol: Optional[str],
+        until_done: bool = False,
+        max_rounds: int = 20,
+        time_budget: float = 120.0,
+    ) -> Union[m.CancelAllResponse, CancelAllResult]:
         """Cancel every open order in ``symbol``.
 
         ``symbol`` is a required keyword so that cancelling everywhere is always explicit:
-        ``symbol=None`` cancels open orders in ALL markets. The server allows 30 calls per
-        minute per account. Repeating the call is harmless (it cancels whatever is still
-        open), so it is retried like a read.
+        ``symbol=None`` cancels open orders in ALL markets. Repeating the call is harmless (it
+        cancels whatever is still open), so it is retried like a read; no Idempotency-Key is sent.
+
+        One call handles at most 500 orders and waits up to 500 ms for orders still being
+        placed. The response lists ``cancelled``, ``already_closed`` (closed on their own: not
+        an error) and ``failed`` with a reason per order in ``failures``; ``has_more`` means call
+        again. An unknown ``symbol`` raises ``NotFoundError``; more than 30 calls a minute per
+        account raises ``RateLimitError`` once the transport's retries are used up.
+
+        ``until_done=True`` repeats the call until nothing is left to retry: while ``has_more``
+        or while a failure is ``INVALID_STATE`` (still being placed) or ``SERVICE_UNAVAILABLE``.
+        After a round without progress it waits 1, 2, 4, 8, then 15 s; it stops after
+        ``max_rounds`` calls or ``time_budget`` seconds; a 429 inside the loop waits for the
+        server's ``retry_after`` and that wait counts against the budget. It returns a ``CancelAllResult`` that
+        merges the rounds (each order's latest state) with ``rounds`` and ``stopped``.
         """
-        payload = self._t.request("cancel_all", body={"symbol": symbol})
+        if not until_done:
+            return self._cancel_all_once(symbol)
+        merge = _Merge()
+        deadline = self._t._clock() + time_budget
+        streak, rounds = 0, 0
+        while True:
+            try:
+                r = self._cancel_all_once(symbol, deadline)
+            except RateLimitError as exc:
+                # 30 calls a minute per account: wait as asked, within the budget (the wait counts).
+                wait = exc.retry_after or next_backoff(streak)
+                if self._t._clock() + wait >= deadline:
+                    return merge.result(rounds, "time_budget")
+                self._t._sleep(wait)
+                continue
+            rounds += 1
+            merge.add(r)
+            if not should_continue(r):
+                return merge.result(rounds, "done")
+            if rounds >= max_rounds:
+                return merge.result(rounds, "max_rounds")
+            if made_progress(r):
+                streak = 0
+                continue
+            delay = next_backoff(streak)
+            streak += 1
+            if self._t._clock() + delay >= deadline:
+                return merge.result(rounds, "time_budget")
+            self._t._sleep(delay)
+
+    def _cancel_all_once(self, symbol: Optional[str], deadline: Optional[float] = None) -> m.CancelAllResponse:
+        payload = self._t.request("cancel_all", body={"symbol": symbol}, deadline=deadline)
         return m.CancelAllResponse.model_validate(_data(payload))
 
 

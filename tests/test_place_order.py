@@ -112,7 +112,7 @@ def test_order_endpoints_do_not_rely_on_idempotency_key(client: cexy.Client) -> 
     # client_order_id (place) and on cancels being repeatable.
     cancel = respx.delete(BASE + "/api/v1/trading/orders/o1").respond(json={"data": ORDER})
     cancel_all = respx.post(BASE + "/api/v1/trading/orders/cancel-all").respond(
-        json={"data": {"cancelled": ["o1"], "failed": []}}
+        json={"data": {"cancelled": ["o1"], "already_closed": [], "failed": [], "failures": [], "has_more": False}}
     )
     client.trading.cancel_order("o1")
     res = client.trading.cancel_all(symbol="BTC/USDT")
@@ -125,7 +125,7 @@ def test_order_endpoints_do_not_rely_on_idempotency_key(client: cexy.Client) -> 
 @respx.mock
 def test_cancel_all_requires_explicit_symbol(client: cexy.Client) -> None:
     route = respx.post(BASE + "/api/v1/trading/orders/cancel-all").respond(
-        json={"data": {"cancelled": [], "failed": []}}
+        json={"data": {"cancelled": [], "already_closed": [], "failed": [], "failures": [], "has_more": False}}
     )
     with pytest.raises(TypeError):
         client.trading.cancel_all()  # type: ignore[call-arg]
