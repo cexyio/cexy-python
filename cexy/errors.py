@@ -139,6 +139,7 @@ for _cls, _codes in {
         "ACCOUNT_ON_HOLD",
         "EMAIL_NOT_VERIFIED",
         "REGION_BLOCKED",
+        "JURISDICTION_BLOCKED",  # HTTP 451
     ),
     NotFoundError: ("NOT_FOUND",),
     ConflictError: (
@@ -169,6 +170,7 @@ _BY_STATUS: Dict[int, Type[CexyApiError]] = {
     400: ValidationError,
     401: AuthenticationError,
     403: ForbiddenError,
+    451: ForbiddenError,  # unavailable for legal reasons (JURISDICTION_BLOCKED)
     404: NotFoundError,
     409: ConflictError,
     422: UnprocessableError,
