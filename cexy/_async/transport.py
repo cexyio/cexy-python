@@ -23,14 +23,13 @@ from cexy._common import (
     operation,
 )
 from cexy._ratelimit import TokenBucket
-from cexy._retry import RetryPolicy
+from cexy._retry import MAX_SERVER_WAIT_S, RetryPolicy
 from cexy.auth import Authenticator, redact_text
 from cexy.errors import (
     CexyApiError,
     CexyConnectionError,
     MissingCredentialsError,
     from_response,
-    retry_after_seconds,
 )
 
 logger = logging.getLogger("cexy")
@@ -57,11 +56,11 @@ class AsyncTransport:
         self.auth = auth
         self.user_agent = user_agent
         self.policy = RetryPolicy(max_retries=max_retries)
-        self.limiter = TokenBucket(per_minute=rate_limit_per_minute)
+        self._sleep = asyncio.sleep
+        self._clock = _monotonic  # injectable for tests; the limiter and cancel_all's loop use it
+        self.limiter = TokenBucket(per_minute=rate_limit_per_minute, clock=lambda: self._clock())
         self._owns_http = http_client is None
         self.http = http_client or httpx.AsyncClient(timeout=timeout, follow_redirects=False)
-        self._sleep = asyncio.sleep
-        self._clock = _monotonic  # injectable for tests (cancel_all until_done time budget)
 
     def _secrets(self) -> tuple[str, ...]:
         return self.auth.secrets() if self.auth is not None else ()
@@ -81,7 +80,7 @@ class AsyncTransport:
         raw: bool = False,
         recover: Optional[Callable[[], Any]] = None,
         on_retry_error: Optional[Callable[[CexyApiError], Any]] = None,
-        deadline: Optional[float] = None,
+        max_retries: Optional[int] = None,
     ) -> Any:
         """Send one logical request, retrying where that is safe.
 
@@ -93,9 +92,13 @@ class AsyncTransport:
         fails, because an earlier attempt may have succeeded (e.g. a repeated order is
         refused as a duplicate, a repeated cancel as INVALID_STATE). A non-None result is
         returned instead of raising.
-        ``deadline``: a ``self._clock()`` value; a retry whose wait would reach it is not
-        attempted and the error is raised instead (used by ``cancel_all(until_done=True)``).
+        ``max_retries``: overrides the client's retry count for this call; ``cancel_all``'s
+        until_done loop passes 0 and does its own retrying, so every HTTP request is one round.
+
+        A server-requested wait (Retry-After / ``retry_after_seconds``) longer than
+        ``MAX_SERVER_WAIT_S`` (120 s) is never waited: the error is raised at once.
         """
+        retries = self.policy.max_retries if max_retries is None else max(0, max_retries)
         op = operation(op_id)
         url = self.base_url + build_path(op, path)
         params = build_query(op, query)
@@ -130,7 +133,7 @@ class AsyncTransport:
                 ambiguous = not isinstance(exc, _NOT_SENT)
                 reason = redact_text(f"{type(exc).__name__}: {exc}", self._secrets())
                 logger.debug("cexy: %s %s network error (attempt %d): %s", op.method, op.path, attempt, reason)
-                if attempt >= self.policy.max_retries:
+                if attempt >= retries:
                     raise CexyConnectionError(f"{op.method} {op.path} failed: {reason}") from None
                 if ambiguous and recover is not None:
                     recovered = await recover()
@@ -162,18 +165,23 @@ class AsyncTransport:
                 recovered = await on_retry_error(err)
                 if recovered is not None:
                     return recovered
-            if attempt >= self.policy.max_retries or not self.policy.is_retryable(err):
+            if attempt >= retries or not self.policy.is_retryable(err):
+                raise err
+            asked = self.policy.server_wait(err)
+            if asked is not None and asked > MAX_SERVER_WAIT_S:
+                logger.debug(
+                    "cexy: %s %s: server asks to wait %.0fs (> %.0fs); not retrying",
+                    op.method,
+                    op.path,
+                    asked,
+                    MAX_SERVER_WAIT_S,
+                )
                 raise err
             if recover is not None and resp.status_code in _AMBIGUOUS_STATUS:
                 recovered = await recover()
                 if recovered is not None:
                     return recovered
             delay = self.policy.delay_for(err, attempt)
-            if deadline is not None:
-                # The server's full requested wait counts, even where the retry wait is capped.
-                asked = retry_after_seconds(err.headers, err.details) or 0.0
-                if self._clock() + max(delay, asked) >= deadline:
-                    raise err
             logger.debug("cexy: retrying %s %s after %s in %.2fs", op.method, op.path, err.code, delay)
             await self._sleep(delay)
             attempt += 1

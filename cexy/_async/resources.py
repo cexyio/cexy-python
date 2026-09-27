@@ -18,7 +18,7 @@ from cexy._common import AUTO
 from cexy._decimal import DecimalLike, to_wire, to_wire_opt
 from cexy._generated import models as m
 from cexy._opmap import operation
-from cexy.errors import CexyApiError, NotFoundError, RateLimitError
+from cexy.errors import CexyApiError, CexyConnectionError, NotFoundError, RateLimitError
 
 DateLike = Union[datetime, str]
 Direction = Union[m.SortDirection, str]
@@ -493,10 +493,14 @@ class AsyncTrading(_Resource):
 
         ``until_done=True`` repeats the call until nothing is left to retry: while ``has_more``
         or while a failure is ``INVALID_STATE`` (still being placed) or ``SERVICE_UNAVAILABLE``.
-        After a round without progress it waits 1, 2, 4, 8, then 15 s; it stops after
-        ``max_rounds`` calls or ``time_budget`` seconds; a 429 inside the loop waits for the
-        server's ``retry_after`` and that wait counts against the budget. It returns a ``CancelAllResult`` that
-        merges the rounds (each order's latest state) with ``rounds`` and ``stopped``.
+        Every round is one HTTP request (no transport retries inside the loop), so it never sends
+        more than ``max_rounds`` requests. After a round without progress it waits 1, 2, 4, 8,
+        then 15 s; a retryable error counts as such a round, except that a 429 waits the server's
+        ``retry_after`` exactly. It stops after ``max_rounds`` calls, or when the next wait would
+        reach ``time_budget`` seconds (that wait is not taken). A non-retryable error is raised
+        with the merged result so far in ``.partial``. It returns a ``CancelAllResult`` that
+        merges the rounds (each order's latest state) with ``rounds``, ``stopped`` and
+        ``last_error_code``.
         """
         if not until_done:
             return await self._cancel_all_once(symbol)
@@ -504,16 +508,26 @@ class AsyncTrading(_Resource):
         deadline = self._t._clock() + time_budget
         streak, rounds = 0, 0
         while True:
+            rounds += 1
             try:
-                r = await self._cancel_all_once(symbol, deadline)
-            except RateLimitError as exc:
-                # 30 calls a minute per account: wait as asked, within the budget (the wait counts).
-                wait = exc.retry_after or next_backoff(streak)
+                r = await self._cancel_all_once(symbol, max_retries=0)
+            except (CexyApiError, CexyConnectionError) as exc:
+                if isinstance(exc, CexyApiError) and not self._t.policy.is_retryable(exc):
+                    exc.partial = merge.result(rounds, "error", exc.code)  # type: ignore[attr-defined]
+                    raise
+                code = exc.code if isinstance(exc, CexyApiError) else "CONNECTION_ERROR"
+                if rounds >= max_rounds:
+                    return merge.result(rounds, "max_rounds", code)
+                asked = exc.retry_after if isinstance(exc, RateLimitError) else None
+                if asked is not None:
+                    wait = asked  # exactly the server's wait; the backoff does not advance
+                else:
+                    wait = next_backoff(streak)
+                    streak += 1
                 if self._t._clock() + wait >= deadline:
-                    return merge.result(rounds, "time_budget")
+                    return merge.result(rounds, "time_budget", code)
                 await self._t._sleep(wait)
                 continue
-            rounds += 1
             merge.add(r)
             if not should_continue(r):
                 return merge.result(rounds, "done")
@@ -528,8 +542,8 @@ class AsyncTrading(_Resource):
                 return merge.result(rounds, "time_budget")
             await self._t._sleep(delay)
 
-    async def _cancel_all_once(self, symbol: Optional[str], deadline: Optional[float] = None) -> m.CancelAllResponse:
-        payload = await self._t.request("cancel_all", body={"symbol": symbol}, deadline=deadline)
+    async def _cancel_all_once(self, symbol: Optional[str], max_retries: Optional[int] = None) -> m.CancelAllResponse:
+        payload = await self._t.request("cancel_all", body={"symbol": symbol}, max_retries=max_retries)
         return m.CancelAllResponse.model_validate(_data(payload))
 
 

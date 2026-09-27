@@ -1,5 +1,5 @@
 {
-  "description": "Opt-in cancel-all loop (TS cancelAll({symbol, untilDone: true}), Python cancel_all(symbol, until_done=True), Go CancelAllUntilDone). Each case feeds the SDK a sequence of 200 responses from POST /api/v1/trading/orders/cancel-all (the `data` object only), in order. The runner uses a fake clock: calls take no time; the only time that passes is the loop's own sleeps. Rules: repeat while has_more is true or any failure code is INVALID_STATE or SERVICE_UNAVAILABLE. After a round with no progress (cancelled + already_closed empty), sleep 1, 2, 4, 8, then 15 s (cap) before the next call; reset after any progress; no sleep after a round with progress. Stop when done, after max_rounds calls (default 20), or when the next sleep would bring the elapsed time to or past time_budget_s (default 120). The result merges rounds by order_id; an order's latest state wins (a later cancelled/already_closed removes an earlier failure). Other failure codes are returned, never a reason to continue. Order-id lists compare as sets; `stopped` is done | max_rounds | time_budget; `failure_codes` maps each still-failed order to its code. 429 and transport errors are retried by the normal transport rules and are not part of these cases.",
+  "description": "Opt-in cancel-all loop (TS cancelAll({symbol, untilDone: true}), Python cancel_all(symbol, until_done=True), Go CancelAllUntilDone). Each case feeds the SDK a sequence of 200 responses from POST /api/v1/trading/orders/cancel-all (the `data` object only), in order. The runner uses a fake clock: calls take no time; the only time that passes is the loop's own sleeps. Rules: repeat while has_more is true or any failure code is INVALID_STATE or SERVICE_UNAVAILABLE. After a round with no progress (cancelled + already_closed empty), sleep 1, 2, 4, 8, then 15 s (cap) before the next call; reset after any progress; no sleep after a round with progress. Stop when done, after max_rounds calls (default 20), or when the next sleep would bring the elapsed time to or past time_budget_s (default 120). The result merges rounds by order_id; an order's latest state wins (a later cancelled/already_closed removes an earlier failure). Other failure codes are returned, never a reason to continue. Order-id lists compare as sets; `stopped` is done | max_rounds | time_budget; `failure_codes` maps each still-failed order to its code. Inside the loop the transport does NOT retry (max retries 0): every HTTP request is one round, so the loop never sends more than max_rounds requests. A response item with `http_status` is an error response (`error` is the error body, `headers` its headers). A retryable error (429, a retryable 5xx, a network failure) counts as a round without progress: after a 429 the loop waits Retry-After / retry_after_seconds (exactly, no jitter) instead of the backoff step and does not advance the backoff; after any other retryable error it waits the next backoff step. A wait that would bring the elapsed time to or past the budget is not taken: the loop stops with stopped=time_budget and last_error_code set. A non-retryable error ends the loop by raising it, with the partial result attached (expect.error_code, expect.partial_cancelled).",
   "cases": [
     {
       "id": "single_round_done",
@@ -323,6 +323,179 @@
         "already_closed": [],
         "failed": [],
         "failure_codes": {}
+      }
+    },
+    {
+      "id": "retryable_error_counts_as_round",
+      "responses": [
+        {
+          "http_status": 503,
+          "error": {
+            "code": "SERVICE_UNAVAILABLE",
+            "message": "busy",
+            "retryable": true
+          }
+        },
+        {
+          "cancelled": [
+            "o1"
+          ],
+          "already_closed": [],
+          "failed": [],
+          "failures": [],
+          "has_more": false
+        }
+      ],
+      "expect": {
+        "calls": 2,
+        "sleeps_s": [
+          1
+        ],
+        "stopped": "done",
+        "cancelled": [
+          "o1"
+        ],
+        "already_closed": [],
+        "failed": [],
+        "failure_codes": {}
+      }
+    },
+    {
+      "id": "errors_every_round_never_exceed_max_rounds",
+      "responses_repeat_last": true,
+      "responses": [
+        {
+          "http_status": 503,
+          "error": {
+            "code": "SERVICE_UNAVAILABLE",
+            "message": "busy",
+            "retryable": true
+          }
+        }
+      ],
+      "expect": {
+        "calls": 11,
+        "sleeps_s": [
+          1,
+          2,
+          4,
+          8,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15
+        ],
+        "stopped": "time_budget",
+        "last_error_code": "SERVICE_UNAVAILABLE",
+        "cancelled": [],
+        "already_closed": [],
+        "failed": [],
+        "failure_codes": {}
+      }
+    },
+    {
+      "id": "rate_limited_round_waits_retry_after",
+      "responses": [
+        {
+          "http_status": 429,
+          "headers": {
+            "Retry-After": "5"
+          },
+          "error": {
+            "code": "RATE_LIMITED",
+            "message": "slow down",
+            "retryable": true,
+            "details": {
+              "retry_after_seconds": 5
+            }
+          }
+        },
+        {
+          "cancelled": [
+            "o1"
+          ],
+          "already_closed": [],
+          "failed": [],
+          "failures": [],
+          "has_more": false
+        }
+      ],
+      "expect": {
+        "calls": 2,
+        "sleeps_s": [
+          5
+        ],
+        "stopped": "done",
+        "cancelled": [
+          "o1"
+        ],
+        "already_closed": [],
+        "failed": [],
+        "failure_codes": {}
+      }
+    },
+    {
+      "id": "rate_limit_beyond_budget_stops_without_waiting",
+      "options": {
+        "time_budget_s": 30
+      },
+      "responses": [
+        {
+          "http_status": 429,
+          "headers": {
+            "Retry-After": "300"
+          },
+          "error": {
+            "code": "RATE_LIMITED",
+            "message": "slow down",
+            "retryable": true,
+            "details": {
+              "retry_after_seconds": 300
+            }
+          }
+        }
+      ],
+      "expect": {
+        "calls": 1,
+        "sleeps_s": [],
+        "stopped": "time_budget",
+        "last_error_code": "RATE_LIMITED",
+        "cancelled": [],
+        "already_closed": [],
+        "failed": [],
+        "failure_codes": {}
+      }
+    },
+    {
+      "id": "non_retryable_error_is_raised_with_partial_result",
+      "responses": [
+        {
+          "cancelled": [
+            "o1"
+          ],
+          "already_closed": [],
+          "failed": [],
+          "failures": [],
+          "has_more": true
+        },
+        {
+          "http_status": 403,
+          "error": {
+            "code": "FORBIDDEN",
+            "message": "missing trade scope",
+            "retryable": false
+          }
+        }
+      ],
+      "expect": {
+        "calls": 2,
+        "sleeps_s": [],
+        "error_code": "FORBIDDEN",
+        "partial_cancelled": [
+          "o1"
+        ]
       }
     }
   ]

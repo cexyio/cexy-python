@@ -8,6 +8,9 @@ from typing import Optional
 from cexy.errors import CexyApiError, RateLimitError, retry_after_seconds
 
 RETRYABLE_STATUS = frozenset({429, 502, 503, 504})
+#: The longest wait a server hint (Retry-After, retry_after_seconds, X-RateLimit-Reset) may cause.
+#: A longer requested wait is not honoured: the call fails at once with the server's error.
+MAX_SERVER_WAIT_S = 120.0
 
 
 class RetryPolicy:
@@ -27,12 +30,18 @@ class RetryPolicy:
     def is_retryable(err: CexyApiError) -> bool:
         return err.retryable or err.status in RETRYABLE_STATUS
 
+    @staticmethod
+    def server_wait(err: CexyApiError) -> Optional[float]:
+        """The server's requested wait in seconds, if it sent a usable one (may exceed
+        ``MAX_SERVER_WAIT_S``; the transport does not retry then)."""
+        return retry_after_seconds(err.headers, err.details)
+
     def delay_for(self, err: CexyApiError, attempt: int) -> float:
         """Server-requested wait (429 Retry-After / details.retry_after_seconds, or a 409
         CONCURRENT_MODIFICATION hint) plus a little jitter; otherwise backoff."""
-        server: Optional[float] = retry_after_seconds(err.headers, err.details)
+        server: Optional[float] = self.server_wait(err)
         if server is not None:
-            return min(server, 60.0) + random.uniform(0, 0.25)  # noqa: S311
+            return min(server, MAX_SERVER_WAIT_S) + random.uniform(0, 0.25)  # noqa: S311
         if isinstance(err, RateLimitError):
             return max(1.0, self.backoff(attempt))
         return self.backoff(attempt)

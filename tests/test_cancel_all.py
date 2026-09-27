@@ -11,6 +11,7 @@ import pytest
 import respx
 
 import cexy
+import cexy.models
 from tests.conftest import BASE, KEY, SECRET, load
 
 URL = BASE + "/api/v1/trading/orders/cancel-all"
@@ -54,18 +55,37 @@ def async_client(fc: FakeClock) -> cexy.AsyncClient:
     return c
 
 
+def to_response(item: Dict[str, Any]) -> httpx.Response:
+    """A conformance response item: a `data` object (200), or `http_status` + `error`/`body`."""
+    if "http_status" not in item:
+        return httpx.Response(200, json={"data": item})
+    body = item["body"] if "body" in item else {"error": item["error"]}
+    return httpx.Response(item["http_status"], json=body, headers=item.get("headers") or {})
+
+
 def replies(case: Dict[str, Any]) -> List[httpx.Response]:
-    bodies = list(case["responses"])
+    items = list(case["responses"])
     if case.get("responses_repeat_last"):
-        bodies += [bodies[-1]] * 50
-    return [httpx.Response(200, json={"data": b}) for b in bodies]
+        items += [items[-1]] * 50
+    return [to_response(i) for i in items]
 
 
-def check(case: Dict[str, Any], res: cexy.CancelAllResult, route: Any, fc: FakeClock) -> None:
+def options(case: Dict[str, Any]) -> Dict[str, Any]:
+    return {("time_budget" if k == "time_budget_s" else k): v for k, v in (case.get("options") or {}).items()}
+
+
+def check(case: Dict[str, Any], res: Any, route: Any, fc: FakeClock) -> None:
     exp = case["expect"]
     assert route.call_count == exp["calls"]
     assert fc.sleeps == exp["sleeps_s"]
+    if "error_code" in exp:  # the loop raised: `res` is the exception
+        assert isinstance(res, cexy.CexyApiError) and res.code == exp["error_code"]
+        assert set(res.partial.cancelled) == set(exp["partial_cancelled"])  # type: ignore[attr-defined]
+        assert res.partial.rounds == exp["calls"]  # type: ignore[attr-defined]
+        return
+    assert isinstance(res, cexy.CancelAllResult)
     assert res.stopped == exp["stopped"] and res.rounds == exp["calls"]
+    assert res.last_error_code == exp.get("last_error_code")
     assert set(res.cancelled) == set(exp["cancelled"])
     assert set(res.already_closed) == set(exp["already_closed"])
     assert set(res.failed) == set(exp["failed"])
@@ -77,8 +97,11 @@ def check(case: Dict[str, Any], res: cexy.CancelAllResult, route: Any, fc: FakeC
 def test_until_done_conformance_sync(case: Dict[str, Any]) -> None:
     route = respx.post(URL).mock(side_effect=replies(case))
     fc = FakeClock()
-    opts = {("time_budget" if k == "time_budget_s" else k): v for k, v in (case.get("options") or {}).items()}
-    res = sync_client(fc).trading.cancel_all(symbol=None, until_done=True, **opts)
+    res: Any
+    try:
+        res = sync_client(fc).trading.cancel_all(symbol=None, until_done=True, **options(case))
+    except cexy.CexyApiError as exc:
+        res = exc
     check(case, res, route, fc)
 
 
@@ -88,9 +111,12 @@ def test_until_done_conformance_async(case: Dict[str, Any]) -> None:
         with respx.mock:
             route = respx.post(URL).mock(side_effect=replies(case))
             fc = FakeClock()
-            opts = {("time_budget" if k == "time_budget_s" else k): v for k, v in (case.get("options") or {}).items()}
+            res: Any
             async with async_client(fc) as client:
-                res = await client.trading.cancel_all(symbol=None, until_done=True, **opts)
+                try:
+                    res = await client.trading.cancel_all(symbol=None, until_done=True, **options(case))
+                except cexy.CexyApiError as exc:
+                    res = exc
             check(case, res, route, fc)
 
     asyncio.run(run())
@@ -162,9 +188,10 @@ def test_429_retry_after_counts_against_the_budget_sync() -> None:
     route = respx.post(URL).mock(side_effect=rate_limited_sequence())
     fc = FakeClock()
     res = sync_client(fc).trading.cancel_all(symbol=None, until_done=True, time_budget=120)
-    # Round 1 is stuck (sleep 1); round 2 gets a 429 asking for 119 s: 1 + 119 reaches the budget.
+    # Round 1 is stuck (sleep 1); round 2 is a 429 asking for 119 s: 1 + 119 reaches the budget,
+    # so that wait is not taken. The 429 counts as a round.
     assert res.stopped == "time_budget" and route.call_count == 2 and fc.sleeps == [1.0]
-    assert res.failed == ["p1"] and res.rounds == 1
+    assert res.failed == ["p1"] and res.rounds == 2 and res.last_error_code == "RATE_LIMITED"
 
 
 def test_429_retry_after_counts_against_the_budget_async() -> None:
@@ -190,8 +217,8 @@ def test_429_within_the_budget_waits_and_the_wait_advances_the_clock() -> None:
     )
     fc = FakeClock()
     res = sync_client(fc).trading.cancel_all(symbol=None, until_done=True, time_budget=120)
-    assert res.stopped == "done" and route.call_count == 2 and len(fc.sleeps) == 1
-    assert 5.0 <= fc.sleeps[0] <= 5.25 and fc.now == fc.sleeps[0]  # Retry-After plus transport jitter
+    assert res.stopped == "done" and route.call_count == 2
+    assert fc.sleeps == [5.0] and fc.now == 5.0  # the loop waits the server's Retry-After exactly
 
 
 @respx.mock
@@ -199,3 +226,23 @@ def test_unknown_symbol_is_not_found() -> None:
     respx.post(URL).respond(404, json={"error": {"code": "NOT_FOUND", "message": "no such market", "retryable": False}})
     with pytest.raises(cexy.NotFoundError):
         sync_client(FakeClock()).trading.cancel_all(symbol="NOPE/USDT", until_done=True)
+
+
+@respx.mock
+def test_twenty_rounds_of_errors_never_exceed_twenty_requests() -> None:
+    busy = {"error": {"code": "SERVICE_UNAVAILABLE", "message": "busy", "retryable": True}}
+    route = respx.post(URL).mock(side_effect=[httpx.Response(503, json=busy)] * 60)
+    res = sync_client(FakeClock()).trading.cancel_all(symbol=None, until_done=True, time_budget=10_000)
+    # Transport retries are off inside the loop: one HTTP request per round.
+    assert route.call_count == 20 and res.rounds == 20 and res.stopped == "max_rounds"
+    assert res.last_error_code == "SERVICE_UNAVAILABLE"
+
+
+@respx.mock
+def test_network_failure_is_a_round_without_progress() -> None:
+    route = respx.post(URL).mock(
+        side_effect=[httpx.ReadTimeout("slow"), httpx.Response(200, json={"data": done(cancelled=["o1"])})]
+    )
+    fc = FakeClock()
+    res = sync_client(fc).trading.cancel_all(symbol=None, until_done=True)
+    assert route.call_count == 2 and fc.sleeps == [1.0] and res.cancelled == ["o1"] and res.rounds == 2

@@ -8,7 +8,7 @@ Typed Python client for the [CEXY.io](https://cexy.io) exchange REST and WebSock
 - Client-side rate limiting, cursor pagination
 - WebSocket client with heartbeat, reconnect and a self-syncing order book
 
-> Status: **0.1.0.dev4, pre-release.** The API may change before 1.0 (see [Versioning](#versioning)).
+> Status: **0.1.0.dev5, pre-release.** The API may change before 1.0 (see [Versioning](#versioning)).
 > Pre-releases need `--pre`: `pip install --pre cexy`.
 
 ## Install
@@ -90,11 +90,16 @@ The server allows 30 calls a minute per account. To keep going until nothing is 
 res = client.trading.cancel_all(symbol=None, until_done=True)   # max_rounds=20, time_budget=120.0
 res.cancelled, res.already_closed, res.failed, res.failures      # merged: each order's latest state
 res.stopped                                                      # "done", "max_rounds" or "time_budget"
+res.last_error_code                                              # e.g. "RATE_LIMITED" if the last round failed
 ```
 
 The loop repeats while `has_more` is true or an order is still being placed (`INVALID_STATE`) or
-unreadable (`SERVICE_UNAVAILABLE`), waits 1, 2, 4, 8, then 15 s after a round without progress,
-and honours a 429's `Retry-After` within the time budget.
+unreadable (`SERVICE_UNAVAILABLE`), and waits 1, 2, 4, 8, then 15 s after a round without progress.
+Every round is exactly one HTTP request (the transport does not retry inside the loop), so it never
+sends more than `max_rounds` requests. A retryable error (429, 5xx, network) counts as a round
+without progress; after a 429 it waits the server's `Retry-After` exactly. A wait that would reach
+`time_budget` is not taken: the loop stops with `stopped == "time_budget"`. A non-retryable error is
+raised with the merged result so far in `err.partial`.
 
 The async client has the same methods:
 
@@ -154,6 +159,9 @@ except UnprocessableError as err:
 - **GET** requests retry on network errors, 429, 502/503/504 and any error with
   `retryable: true`.
 - **429** waits for the larger of the `Retry-After` header and `details.retry_after_seconds`.
+  These server hints are untrusted: unparseable, negative or non-finite values are ignored, and a
+  requested wait **above 120 s is never waited**: the call raises `RateLimitError` at once (its
+  `.retry_after` still gives the server's value), so a bad header can't hang your program.
 - **Orders: safety rests on `client_order_id`, not on `Idempotency-Key`.** The server
   does not honour `Idempotency-Key` on `POST /trading/orders`, `DELETE /trading/orders/{id}`
   or cancel-all, so the SDK does not send one there.
@@ -197,8 +205,9 @@ Server-side limits:
 The client keeps itself below these with a token bucket: **100/min by default without a
 key, 300/min with a key**. Override it with `Client(rate_limit_per_minute=...)`. When
 responses carry `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset`
-(the number of **seconds** until the window resets), the client slows down to match them. A 429
-is retried after the server's `Retry-After`.
+(the number of **seconds** until the window resets), the client slows down to match them, but it
+never blocks longer than 120 s because of these headers. A 429 is retried after the server's
+`Retry-After` (at most 120 s; see above).
 
 ## WebSocket
 
