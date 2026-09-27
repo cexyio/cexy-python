@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional, Union
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
@@ -14,7 +14,7 @@ class ApiScope(OpenEnum):
     """
     Scope attached to an API key.
 
-    Here scopes apply to API keys only, and a session token carries no key scopes at all.
+     Scopes narrow what an API key may do. They apply to API keys only: a signed-in session carries none and is not limited by them.
     """
 
     READ = "read"
@@ -64,7 +64,12 @@ class CancelAllRequest(BaseModel):
     model_config = ConfigDict(
         extra="allow",
     )
-    symbol: Annotated[Optional[str], Field(description="Limit the cancellation to one market.")] = None
+    symbol: Annotated[
+        Optional[str],
+        Field(
+            description="Limit the cancellation to one market. Omitted or `null`, every market's open orders are cancelled."
+        ),
+    ] = None
 
 
 class CancelAllResponse(BaseModel):
@@ -176,8 +181,6 @@ class DepositAddressResponse(BaseModel):
 class DepositStatus(OpenEnum):
     """
     Lifecycle of an incoming blockchain deposit.
-
-    One enum makes those unrepresentable.
     """
 
     DETECTED = "detected"
@@ -191,7 +194,9 @@ class DepositStatus(OpenEnum):
 
 class ErrorCode(OpenEnum):
     """
-    PROVISIONAL (errors.yaml) until the served spec includes it.
+    Stable, machine-readable error identifiers.
+
+    Serialized as `SCREAMING_SNAKE_CASE`. Adding a variant is backwards-compatible; renaming or removing one is a breaking API change.
     """
 
     VALIDATION_FAILED = "VALIDATION_FAILED"
@@ -216,6 +221,7 @@ class ErrorCode(OpenEnum):
     ACCOUNT_ON_HOLD = "ACCOUNT_ON_HOLD"
     EMAIL_NOT_VERIFIED = "EMAIL_NOT_VERIFIED"
     REGION_BLOCKED = "REGION_BLOCKED"
+    JURISDICTION_BLOCKED = "JURISDICTION_BLOCKED"
     NOT_FOUND = "NOT_FOUND"
     METHOD_NOT_ALLOWED = "METHOD_NOT_ALLOWED"
     ALREADY_EXISTS = "ALREADY_EXISTS"
@@ -375,8 +381,6 @@ class JoinPoolResponse(BaseModel):
 class LedgerEntryKind(OpenEnum):
     """
     What a ledger entry records.
-
-    Adding a money-moving feature means adding a variant here and emitting entries — never editing a balance formula.
     """
 
     DEPOSIT = "deposit"
@@ -600,7 +604,7 @@ class OrderBookResponse(BaseModel):
     sequence: Annotated[
         int,
         Field(
-            description="The realtime sequence this snapshot is current as of.\n\nTo synchronise with the `orderbook:{symbol}` WebSocket channel: subscribe first, fetch this snapshot, and ignore updates whose `sequence` is at or below this value. Every update carries the complete top 50 levels of both sides and replaces the previous state (there are no deltas). A gap in `sequence` only means the book was briefly stale; the next update is complete.",
+            description="The realtime sequence this snapshot is current as of.\n\nEach `orderbook.update` on the `orderbook:{symbol}` websocket channel carries both sides of the top 50 levels in full (`data.full` is always `true`) and replaces the previous state; there are no deltas to buffer. Ignore an update whose `sequence` is at or below the one you hold. A gap only means a book was missed: the next update replaces it whole.",
             ge=0,
         ),
     ]
@@ -635,8 +639,6 @@ class OrderStatus(OpenEnum):
 class OrderType(OpenEnum):
     """
     Order types the matching engine accepts.
-
-    That separation is kept: this enum covers what the book itself understands.
     """
 
     LIMIT = "limit"
@@ -799,6 +801,12 @@ class WithdrawalAddressResponse(BaseModel):
 class WithdrawalStatus(OpenEnum):
     """
     Lifecycle of an outgoing withdrawal.
+
+
+
+    `pending_approval` waits for an operator to approve the withdrawal. `broadcast_unknown`
+    means the transaction may have been sent: the funds stay debited until it is resolved
+    against the chain.
     """
 
     REQUESTED = "requested"
@@ -995,20 +1003,38 @@ class DepositResponse(BaseModel):
 
 
 class ErrorBody(BaseModel):
+    """
+    The `error` object as it appears on the wire.
+    """
+
     model_config = ConfigDict(
         extra="allow",
     )
     code: ErrorCode
-    message: Annotated[str, Field(description="Human-readable; may change. Branch on `code`.")]
-    details: Optional[Dict[str, Any]] = None
-    fields: Optional[Dict[str, str]] = None
-    request_id: Optional[str] = None
-    retryable: bool
+    details: Annotated[
+        Optional[Dict[str, Union[str, int, bool]]],
+        Field(description="Structured context, when available."),
+    ] = None
+    fields: Annotated[
+        Optional[Dict[str, str]],
+        Field(
+            description="Per-field validation messages, keyed by request field name.\n\nPresent only on validation failures. Render each message beside its input."
+        ),
+    ] = None
+    message: Annotated[
+        str,
+        Field(description="Human-readable description. May change between releases."),
+    ]
+    request_id: Annotated[
+        Optional[str],
+        Field(description="Correlates this response with server logs. Quote it in support requests."),
+    ] = None
+    retryable: Annotated[bool, Field(description="Whether an identical retry could succeed.")]
 
 
 class ErrorResponse(BaseModel):
     """
-    The error envelope returned by every failing request.
+    The top-level error envelope.
     """
 
     model_config = ConfigDict(
@@ -1298,7 +1324,7 @@ class PlaceOrderRequest(BaseModel):
     """
     Places an order.
 
-    Set `client_order_id` to make a retry safe: it is unique per account, a repeated id is refused before any funds move, and the order can be recovered with GET /api/v1/trading/orders/by-client-id/{client_order_id}. `Idempotency-Key` has no effect on this endpoint.
+    Set `client_order_id` to make a retry safe: it is unique per account, so a repeat is refused before any funds move, and `GET /trading/orders/by-client-id/{client_order_id}` recovers the outcome. `Idempotency-Key` is not honoured for orders.
     """
 
     model_config = ConfigDict(
