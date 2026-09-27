@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "CEXY API",
-    "description": "REST API for a cryptocurrency exchange.\n\n## Conventions\n\n**Amounts are strings.** Every monetary value is a decimal string such as `\"1.50000000\"`,\nnever a JSON number. A JSON number is parsed into an IEEE-754 double by most clients,\nwhich cannot represent `0.1` exactly \u2014 so a number would silently corrupt balances.\nParse them with a decimal library, not a float.\n\n**Errors have machine-readable codes.** Every failure returns\n`{\"error\": {\"code\", \"message\", \"details\", \"request_id\", \"retryable\"}}`. Branch on\n`code`, never on `message`, which may change. `retryable` says whether an identical\nretry could succeed.\n\n**Two-factor is mandatory.** Registration cannot complete without enrolling an\nauthenticator, and a correct password alone never returns a session. Sensitive actions\nadditionally require a *recently* verified code \u2014 call\n`POST /account/security/two-factor/verify` to refresh the window.\n\n**Pagination.** Histories use opaque cursors: pass `next_cursor` back as `cursor`. They\ncarry no `total`, because counting an ever-growing collection on every page is a full\nscan and the number is stale before it renders. Catalogues use offsets and do include a\ntotal.\n\n**Idempotency.** Send an `Idempotency-Key` header on any financial mutation. A retry with\nthe same key and body replays the original response; the same key with a *different* body\nis rejected with `IDEMPOTENCY_KEY_CONFLICT`.\n\n**Rate limits.** Responses carry `X-RateLimit-Limit`, `X-RateLimit-Remaining` and\n`X-RateLimit-Reset`. A `429` includes `Retry-After`.",
+    "description": "REST API for a cryptocurrency exchange.\n\n## Conventions\n\n**Amounts are strings.** Every monetary value is a decimal string such as `\"1.50000000\"`,\nnever a JSON number. A JSON number is parsed into an IEEE-754 double by most clients,\nwhich cannot represent `0.1` exactly \u2014 so a number would silently corrupt balances.\nParse them with a decimal library, not a float.\n\n**Errors have machine-readable codes.** Every failure returns\n`{\"error\": {\"code\", \"message\", \"details\", \"request_id\", \"retryable\"}}`. Branch on\n`code`, never on `message`, which may change. `retryable` says whether an identical\nretry could succeed.\n\n**Two-factor is mandatory.** Registration cannot complete without enrolling an\nauthenticator, and a correct password alone never returns a session. Sensitive actions\nadditionally require a *recently* verified code \u2014 call\n`POST /account/security/two-factor/verify` to refresh the window.\n\n**Pagination.** Histories use opaque cursors: pass `next_cursor` back as `cursor`. They\ncarry no `total`, because counting an ever-growing collection on every page is a full\nscan and the number is stale before it renders. Catalogues use offsets and do include a\ntotal.\n\n**Idempotency.** The operations that move money out of an order book honour an\n`Idempotency-Key` header, and declare it: `POST /wallet/withdrawals`,\n`POST /account/transfers`, `POST /account/sub-accounts/{id}/transfer`,\n`POST /futures/transfers`, `POST /futures/transfers/return`, and\njoining and leaving a pool. A retry with the same key and body replays the original\nresponse; the same key with a *different* body is rejected with `IDEMPOTENCY_KEY_CONFLICT`.\nOrders do not take the header: set `client_order_id`, which is unique per account, and look\nan order up by it after a timeout. Cancelling is naturally safe to repeat.\n\n**Rate limits.** Responses carry `X-RateLimit-Limit`, `X-RateLimit-Remaining` and\n`X-RateLimit-Reset`, the seconds until the window resets. A request without credentials\ncounts against its IP address: 120 a minute. A signed-in session counts against its\naccount and an API key against the key: 600 a minute each. A `429` carries\n`retry_after_seconds` in the error's `details`, and `Retry-After`.\n\n**WebSocket.** `/api/v1/ws` carries every realtime channel on one connection. Every client\nmessage with an `id` is answered with that `id`: `authenticated` (with `user_id`),\n`subscribed`, `unsubscribed`, `pong`, or `error` with a `code` and `message`. Private\nchannels need an `auth` frame carrying a session access token first; API keys do not open\nthem. An `orderbook.update` carries the top 50 levels of both sides in full and replaces the\nprevious book.",
     "license": {
       "name": "MIT",
       "url": "https://opensource.org/license/mit"
@@ -41,10 +41,6 @@
     {
       "name": "udf",
       "description": "A TradingView UDF datafeed. Point the charting library at /api/v1/udf. Like the aggregator feeds, this follows TradingView's conventions rather than this API's: OHLCV arrives as parallel arrays of JSON numbers, and `s` is a status string rather than an HTTP code."
-    },
-    {
-      "name": "health",
-      "description": "Liveness and readiness probes."
     }
   ],
   "servers": [
@@ -172,7 +168,14 @@
             }
           },
           "404": {
-            "description": "No such asset"
+            "description": "No such asset",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -494,7 +497,14 @@
             }
           },
           "404": {
-            "description": "No such asset"
+            "description": "No such asset",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "x-required-scope": "-",
@@ -566,7 +576,14 @@
         ],
         "responses": {
           "200": {
-            "description": "CSV of deposits"
+            "description": "CSV of deposits. Columns: deposit_id, time, asset, network, amount, status, txid, output_index, confirmations",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -612,7 +629,14 @@
         ],
         "responses": {
           "200": {
-            "description": "CSV of ledger entries"
+            "description": "CSV of ledger entries. Columns: entry_id, time, asset, kind, available_delta, locked_delta, pending_delta, available_after, sequence, reference",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -657,10 +681,24 @@
         ],
         "responses": {
           "200": {
-            "description": "CSV of orders"
+            "description": "CSV of orders. Columns: order_id, client_order_id, time, market, side, type, status, price, quantity, filled_quantity, filled_quote_quantity, fee_paid",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
-            "description": "The date range is invalid or too wide"
+            "description": "The date range is invalid or too wide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -705,10 +743,24 @@
         ],
         "responses": {
           "200": {
-            "description": "CSV of executed trades"
+            "description": "CSV of executed trades. Columns: trade_id, time, market, side, role, price, quantity, quote_quantity, fee, fee_asset",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
-            "description": "The date range is invalid or too wide"
+            "description": "The date range is invalid or too wide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -753,7 +805,14 @@
         ],
         "responses": {
           "200": {
-            "description": "CSV of withdrawals"
+            "description": "CSV of withdrawals. Columns: withdrawal_id, time, asset, network, amount, fee, fee_asset, status, address, txid",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -872,7 +931,14 @@
             }
           },
           "404": {
-            "description": "No such market"
+            "description": "No such market",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "x-required-scope": "-",
@@ -966,7 +1032,14 @@
             }
           },
           "404": {
-            "description": "No such market"
+            "description": "No such market",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "x-required-scope": "-",
@@ -1025,7 +1098,14 @@
             }
           },
           "404": {
-            "description": "No such market"
+            "description": "No such market",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "x-required-scope": "-",
@@ -1122,7 +1202,14 @@
             }
           },
           "404": {
-            "description": "No such market"
+            "description": "No such market",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "x-required-scope": "-",
@@ -1236,7 +1323,14 @@
             }
           },
           "404": {
-            "description": "No pool for that market"
+            "description": "No pool for that market",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "x-required-scope": "-",
@@ -1249,7 +1343,7 @@
           "pools"
         ],
         "summary": "Removes liquidity.",
-        "description": "Shares are burned and a proportional slice of both assets is returned.",
+        "description": "The pool's resting orders for the market are cancelled first, because reserves locked in an order cannot be paid out. Shares are burned and a proportional slice of both assets is returned.",
         "operationId": "exit_pool",
         "parameters": [
           {
@@ -1303,13 +1397,34 @@
             }
           },
           "400": {
-            "description": "More shares than the account holds"
+            "description": "More shares than the account holds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "404": {
-            "description": "No pool, or no position in it"
+            "description": "No pool, or no position in it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "409": {
-            "description": "The idempotency key was reused with a different body"
+            "description": "The idempotency key was reused with a different body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1381,16 +1496,44 @@
             }
           },
           "400": {
-            "description": "The amounts or the implied price were refused"
+            "description": "The amounts or the implied price were refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "404": {
-            "description": "No pool for that market"
+            "description": "No pool for that market",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "409": {
-            "description": "The idempotency key was reused with a different body"
+            "description": "The idempotency key was reused with a different body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "422": {
-            "description": "Insufficient funds"
+            "description": "Insufficient funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1502,7 +1645,7 @@
           "trading"
         ],
         "summary": "Places an order.",
-        "description": "Funds are reserved before the order reaches the book, so a matched order can never be unfunded. On a buy the reservation covers the value plus the **taker** fee, which is the worst case; a maker fill releases the difference.\n\nSet `client_order_id` to make a retry safe (a repeated id is refused before funds move). `Idempotency-Key` has no effect on this endpoint.",
+        "description": "Funds are reserved before the order reaches the book, so a matched order can never be unfunded. On a buy the reservation covers the value plus the **taker** fee, which is the worst case \u2014 a maker fill releases the difference.\n\nSet `client_order_id` to make a retry safe: it is unique per account, so a repeat is refused before any funds move, and `GET /trading/orders/by-client-id/{client_order_id}` recovers the outcome. `Idempotency-Key` is not honoured here.",
         "operationId": "place_order",
         "requestBody": {
           "content": {
@@ -1534,16 +1677,44 @@
             }
           },
           "400": {
-            "description": "The order failed validation"
+            "description": "The order failed validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "409": {
-            "description": "That client order id is already in use"
+            "description": "That client order id is already in use",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "422": {
-            "description": "Insufficient funds, or the market is unavailable"
+            "description": "Insufficient funds, or the market is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "503": {
-            "description": "The market is saturated; retry shortly"
+            "description": "The market is saturated; retry shortly",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1593,7 +1764,14 @@
             }
           },
           "404": {
-            "description": "No such order on this account"
+            "description": "No such order on this account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1803,7 +1981,14 @@
             }
           },
           "404": {
-            "description": "No such order on this account"
+            "description": "No such order on this account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1851,10 +2036,24 @@
             }
           },
           "404": {
-            "description": "No such order on this account"
+            "description": "No such order on this account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "409": {
-            "description": "The order is no longer open"
+            "description": "The order is no longer open",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1971,7 +2170,7 @@
           "wallet"
         ],
         "summary": "The caller's deposit address for an asset on a network.",
-        "description": "Idempotent: the same address is returned on every call.",
+        "description": "The first call for an asset and network creates the address; every later call, and any call racing the first, returns that same address. On chains where an address works across sibling networks, the account's address from a sibling is reused.",
         "operationId": "deposit_address",
         "parameters": [
           {
@@ -2015,10 +2214,24 @@
             }
           },
           "404": {
-            "description": "No such asset or network"
+            "description": "No such asset or network",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "422": {
-            "description": "Deposits are disabled for this pairing"
+            "description": "Deposits are disabled for this pairing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -2168,7 +2381,14 @@
             }
           },
           "404": {
-            "description": "No such deposit on this account"
+            "description": "No such deposit on this account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -2356,7 +2576,14 @@
             }
           },
           "404": {
-            "description": "No such withdrawal on this account"
+            "description": "No such withdrawal on this account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -2441,7 +2668,7 @@
       },
       "ApiScope": {
         "type": "string",
-        "description": "Scope attached to an API key.\n\nHere scopes apply to API keys only, and a session token carries no key scopes at all.",
+        "description": "Scope attached to an API key.\n\n Scopes narrow what an API key may do. They apply to API keys only: a signed-in session carries none and is not limited by them.",
         "enum": [
           "read",
           "trade"
@@ -2676,7 +2903,7 @@
         "properties": {
           "symbol": {
             "type": "string",
-            "description": "Limit the cancellation to one market.",
+            "description": "Limit the cancellation to one market. Omitted or `null`, every market's open orders are cancelled.",
             "nullable": true
           }
         }
@@ -2905,7 +3132,7 @@
       },
       "DepositStatus": {
         "type": "string",
-        "description": "Lifecycle of an incoming blockchain deposit.\n\nOne enum makes those unrepresentable.",
+        "description": "Lifecycle of an incoming blockchain deposit.",
         "enum": [
           "detected",
           "credited",
@@ -2916,8 +3143,27 @@
           "internal"
         ]
       },
+      "DetailValue": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "Text."
+          },
+          {
+            "type": "integer",
+            "format": "int64",
+            "description": "Whole number."
+          },
+          {
+            "type": "boolean",
+            "description": "Boolean flag."
+          }
+        ],
+        "description": "A structured value attached to an error. Kept deliberately narrow so that no accidental secret (a token, a key, a full document) can be attached."
+      },
       "ErrorBody": {
         "type": "object",
+        "description": "The `error` object as it appears on the wire.",
         "required": [
           "code",
           "message",
@@ -2927,31 +3173,38 @@
           "code": {
             "$ref": "#/components/schemas/ErrorCode"
           },
-          "message": {
-            "type": "string",
-            "description": "Human-readable; may change. Branch on `code`."
-          },
           "details": {
             "type": "object",
-            "additionalProperties": true
+            "description": "Structured context, when available.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DetailValue"
+            }
           },
           "fields": {
             "type": "object",
+            "description": "Per-field validation messages, keyed by request field name.\n\nPresent only on validation failures. Render each message beside its input.",
             "additionalProperties": {
               "type": "string"
             }
           },
+          "message": {
+            "type": "string",
+            "description": "Human-readable description. May change between releases."
+          },
           "request_id": {
             "type": "string",
+            "description": "Correlates this response with server logs. Quote it in support requests.",
             "nullable": true
           },
           "retryable": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Whether an identical retry could succeed."
           }
         }
       },
       "ErrorCode": {
         "type": "string",
+        "description": "Stable, machine-readable error identifiers.\n\nSerialized as `SCREAMING_SNAKE_CASE`. Adding a variant is backwards-compatible; renaming or removing one is a breaking API change.",
         "enum": [
           "VALIDATION_FAILED",
           "MALFORMED_REQUEST",
@@ -2975,6 +3228,7 @@
           "ACCOUNT_ON_HOLD",
           "EMAIL_NOT_VERIFIED",
           "REGION_BLOCKED",
+          "JURISDICTION_BLOCKED",
           "NOT_FOUND",
           "METHOD_NOT_ALLOWED",
           "ALREADY_EXISTS",
@@ -2996,12 +3250,11 @@
           "SERVICE_UNAVAILABLE",
           "UNDER_MAINTENANCE",
           "ENGINE_OVERLOADED"
-        ],
-        "description": "PROVISIONAL (errors.yaml) until the served spec includes it."
+        ]
       },
       "ErrorResponse": {
         "type": "object",
-        "description": "The error envelope returned by every failing request.",
+        "description": "The top-level error envelope.",
         "required": [
           "error"
         ],
@@ -3280,7 +3533,7 @@
       },
       "LedgerEntryKind": {
         "type": "string",
-        "description": "What a ledger entry records.\n\nAdding a money-moving feature means adding a variant here and emitting entries \u2014 never editing a balance formula.",
+        "description": "What a ledger entry records.",
         "enum": [
           "deposit",
           "deposit_reversal",
@@ -3690,7 +3943,7 @@
           "sequence": {
             "type": "integer",
             "format": "int64",
-            "description": "The realtime sequence this snapshot is current as of.\n\nTo synchronise with the `orderbook:{symbol}` WebSocket channel: subscribe first, fetch this snapshot, and ignore updates whose `sequence` is at or below this value. Every update carries the complete top 50 levels of both sides and replaces the previous state (there are no deltas). A gap in `sequence` only means the book was briefly stale; the next update is complete.",
+            "description": "The realtime sequence this snapshot is current as of.\n\nEach `orderbook.update` on the `orderbook:{symbol}` websocket channel carries both sides of the top 50 levels in full (`data.full` is always `true`) and replaces the previous state; there are no deltas to buffer. Ignore an update whose `sequence` is at or below the one you hold. A gap only means a book was missed: the next update replaces it whole.",
             "minimum": 0
           },
           "symbol": {
@@ -3865,7 +4118,7 @@
       },
       "OrderType": {
         "type": "string",
-        "description": "Order types the matching engine accepts.\n\nThat separation is kept: this enum covers what the book itself understands.",
+        "description": "Order types the matching engine accepts.",
         "enum": [
           "limit",
           "market",
@@ -3905,7 +4158,7 @@
       },
       "PlaceOrderRequest": {
         "type": "object",
-        "description": "Places an order.\n\nSet `client_order_id` to make a retry safe: it is unique per account, a repeated id is refused before any funds move, and the order can be recovered with GET /api/v1/trading/orders/by-client-id/{client_order_id}. `Idempotency-Key` has no effect on this endpoint.",
+        "description": "Places an order.\n\nSet `client_order_id` to make a retry safe: it is unique per account, so a repeat is refused before any funds move, and `GET /trading/orders/by-client-id/{client_order_id}` recovers the outcome. `Idempotency-Key` is not honoured for orders.",
         "required": [
           "symbol",
           "side",
@@ -4363,7 +4616,7 @@
       },
       "WithdrawalStatus": {
         "type": "string",
-        "description": "Lifecycle of an outgoing withdrawal.",
+        "description": "Lifecycle of an outgoing withdrawal.\n\n\n\n`pending_approval` waits for an operator to approve the withdrawal. `broadcast_unknown`\nmeans the transaction may have been sent: the funds stay debited until it is resolved\nagainst the chain.",
         "enum": [
           "requested",
           "pending_approval",

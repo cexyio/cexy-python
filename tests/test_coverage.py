@@ -59,8 +59,10 @@ def test_operation_table_matches_spec() -> None:
 def test_every_schema_is_generated() -> None:
     from cexy._generated import models
 
-    # Amount is a decimal string: it collapses to decimal.Decimal on every field.
-    missing = [n for n in SPEC["components"]["schemas"] if n != "Amount" and not hasattr(models, n)]
+    # Scalar aliases are inlined by the generator rather than emitted as classes: Amount (a
+    # decimal string, which becomes decimal.Decimal) and DetailValue (string | integer | boolean).
+    inlined = {"Amount", "DetailValue"}
+    missing = [n for n in SPEC["components"]["schemas"] if n not in inlined and not hasattr(models, n)]
     assert missing == []
 
 

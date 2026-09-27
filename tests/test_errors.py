@@ -149,3 +149,17 @@ def test_max_retries_zero() -> None:
         with pytest.raises(cexy.ServerError):
             c.markets.list()
     assert route.call_count == 1
+
+
+def test_every_spec_error_code_maps_to_a_class() -> None:
+    """Every ErrorCode in the spec is known, and its class matches its HTTP status family."""
+    import json
+    from pathlib import Path
+
+    from cexy import errors
+
+    spec = json.loads((Path(__file__).parents[1] / "spec" / "openapi.sdk.json").read_text())
+    codes = spec["components"]["schemas"]["ErrorCode"]["enum"]
+    assert set(codes) <= errors.KNOWN_ERROR_CODES
+    err = errors.from_response(451, {"error": {"code": "JURISDICTION_BLOCKED", "message": "x", "retryable": False}}, {})
+    assert isinstance(err, errors.ForbiddenError)
