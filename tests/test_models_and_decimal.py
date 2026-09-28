@@ -76,3 +76,132 @@ def test_error_codes_match_errors_yaml() -> None:
     # every known code has a specific exception class
     for code in codes:
         assert cexy.errors.error_class_for(code, 400) is not cexy.CexyApiError
+
+
+# --- LedgerEntryResponse.reference: a tolerant union told apart by `type` (H-1) ---
+
+_ENTRY = {
+    "asset": "USDT",
+    "available_after": "1",
+    "available_delta": "1",
+    "created_at": "2026-09-28T00:00:00Z",
+    "id": "e1",
+    "kind": "deposit",
+    "locked_delta": "0",
+    "pending_delta": "0",
+    "sequence": 1,
+}
+
+
+@pytest.mark.parametrize(
+    "reference, cls",
+    [
+        ({"type": "deposit", "deposit_id": "d1"}, "LedgerReferenceDeposit"),
+        ({"type": "withdrawal", "withdrawal_id": "w1"}, "LedgerReferenceWithdrawal"),
+        ({"type": "order", "order_id": "o1"}, "LedgerReferenceOrder"),
+        ({"type": "trade", "trade_id": "t1", "order_id": "o1"}, "LedgerReferenceTrade"),
+        ({"type": "transfer", "counterparty_user_id": "u1", "transfer_ref": "r"}, "LedgerReferenceTransfer"),
+        ({"type": "adjustment", "operator_user_id": "u2"}, "LedgerReferenceAdjustment"),
+        ({"type": "pool", "pool_id": "p1"}, "LedgerReferencePool"),
+        ({"type": "futures_transfer", "futures_transfer_id": "f1"}, "LedgerReferenceFuturesTransfer"),
+        ({"type": "system", "cause": "rebate"}, "LedgerReferenceSystem"),
+    ],
+)
+def test_ledger_reference_known_variants(reference: dict, cls: str) -> None:
+    from cexy import models
+
+    entry = models.LedgerEntryResponse.model_validate({**_ENTRY, "reference": reference})
+    assert type(entry.reference).__name__ == cls
+    assert entry.reference.model_dump() == reference
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        {"type": "brand_new_cause", "x": 1},  # a type this SDK does not know yet
+        {"type": "trade", "trade_id": "t1"},  # a known type missing a required key
+        {"deposit_id": "d1"},  # no type at all
+        "not-an-object",
+        None,
+    ],
+)
+def test_ledger_reference_unknown_never_raises(reference: object) -> None:
+    from cexy import models
+
+    entry = models.LedgerEntryResponse.model_validate({**_ENTRY, "reference": reference})
+    assert isinstance(entry.reference, models.LedgerReferenceUnknown)
+    if isinstance(reference, dict):
+        assert entry.reference.model_dump(exclude_none=True) == reference
+    else:
+        assert entry.reference.raw == reference
+
+
+def test_ids_are_plain_strings_without_format_checks() -> None:
+    from cexy import models
+
+    ref = models.LedgerEntryResponse.model_validate(
+        {**_ENTRY, "reference": {"type": "order", "order_id": "not-24-hex-at-all"}}
+    ).reference
+    assert isinstance(ref, models.LedgerReferenceOrder) and ref.order_id == "not-24-hex-at-all"
+
+
+def test_h1_enum_and_error_code_additions() -> None:
+    from cexy import models
+    from cexy.errors import UnprocessableError, error_class_for
+
+    assert models.WithdrawalStatus("reverted") == "reverted"
+    assert models.LedgerEntryKind("transfer_in_held") == "transfer_in_held"
+    assert error_class_for("PRICE_UNAVAILABLE", 422) is UnprocessableError
+    assert "LedgerReference" in models.__all__
+
+
+def test_join_pool_deviation_is_decimal() -> None:
+    from decimal import Decimal
+
+    from cexy import models
+
+    req = models.JoinPoolRequest.model_validate(
+        {"base_amount": "1", "quote_amount": "2", "max_ratio_deviation_percent": "0.5"}
+    )
+    assert req.max_ratio_deviation_percent == Decimal("0.5")
+
+
+_BAD_FIELD_TYPES = [
+    {"type": "deposit", "deposit_id": 123},  # number where a string is expected
+    {"type": "trade", "trade_id": ["t1"], "order_id": "o1"},  # list where a string is expected
+    {"type": "system", "cause": {"nested": True}},  # object where a string is expected
+    {"type": "transfer", "counterparty_user_id": None, "transfer_ref": "r"},  # null required string
+    {"type": 5, "deposit_id": "d1"},  # a non-string type
+    {"type": ["deposit"], "deposit_id": "d1"},  # an unhashable type
+]
+
+
+@pytest.mark.parametrize("reference", _BAD_FIELD_TYPES)
+def test_ledger_reference_known_type_with_bad_field_types_falls_back(reference: dict) -> None:
+    from cexy import models
+
+    entry = models.LedgerEntryResponse.model_validate({**_ENTRY, "reference": reference})
+    assert isinstance(entry.reference, models.LedgerReferenceUnknown)
+    assert entry.reference.model_dump() == {"raw": None, **reference}  # every field kept as sent
+    assert entry.id == "e1" and entry.kind == "deposit"  # the rest of the entry decodes normally
+
+
+@respx.mock
+def test_ledger_page_with_malformed_reference_decodes_sync(client: cexy.Client) -> None:
+    items = [{**_ENTRY, "id": f"e{i}", "reference": ref} for i, ref in enumerate(_BAD_FIELD_TYPES)]
+    items.append({**_ENTRY, "id": "ok", "reference": {"type": "order", "order_id": "o1"}})
+    respx.get(BASE + "/api/v1/account/ledger").respond(json={"items": items, "has_more": False})
+    page = client.account.ledger()
+    assert [type(e.reference).__name__ for e in page.items] == ["LedgerReferenceUnknown"] * len(_BAD_FIELD_TYPES) + [
+        "LedgerReferenceOrder"
+    ]
+
+
+async def test_ledger_page_with_malformed_reference_decodes_async() -> None:
+    items = [{**_ENTRY, "id": f"e{i}", "reference": ref} for i, ref in enumerate(_BAD_FIELD_TYPES)]
+    async with cexy.AsyncClient(api_key="ak_test_key", api_secret="test_secret") as client:
+        with respx.mock:
+            respx.get(BASE + "/api/v1/account/ledger").respond(json={"items": items, "has_more": False})
+            page = await client.account.ledger()
+    assert all(isinstance(e.reference, m.LedgerReferenceUnknown) for e in page.items)
+    assert page.items[0].reference.model_dump()["deposit_id"] == 123

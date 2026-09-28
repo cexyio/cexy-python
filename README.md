@@ -8,7 +8,7 @@ Typed Python client for the [CEXY.io](https://cexy.io) exchange REST and WebSock
 - Client-side rate limiting, cursor pagination
 - WebSocket client with heartbeat, reconnect and a self-syncing order book
 
-> Status: **0.1.0.dev5, pre-release.** The API may change before 1.0 (see [Versioning](#versioning)).
+> Status: **0.1.0.dev6, pre-release.** The API may change before 1.0 (see [Versioning](#versioning)).
 > Pre-releases need `--pre`: `pip install --pre cexy`.
 
 ## Install
@@ -79,7 +79,8 @@ Note: `wallet.deposit_address()` **creates** a deposit address the first time it
 for an asset/network pair, then returns the same address on later calls.
 
 `cancel_all` requires the `symbol` keyword; pass `symbol=None` explicitly to cancel orders
-in every market. The server allows 30 cancel-all calls per minute per account.
+in every market. It also cancels stop orders that have not triggered yet (`pending_trigger`),
+so nothing fires into the market afterwards. The server allows 30 cancel-all calls per minute per account.
 
 One `cancel_all` call handles at most 500 orders and waits up to 500 ms for orders still being
 placed. The result lists `cancelled`, `already_closed` (orders that closed on their own; not an
@@ -119,6 +120,29 @@ asyncio.run(main())
 The API sends every amount as a decimal string. The SDK parses them into
 `decimal.Decimal`, and sends amounts as strings. Passing a `float` raises `TypeError`
 before anything is sent, because a float cannot represent most decimal amounts exactly.
+
+## Ledger references
+
+`LedgerEntryResponse.reference` says what caused an entry. It is a union told apart by `type`:
+`LedgerReferenceDeposit`, `LedgerReferenceWithdrawal`, `LedgerReferenceOrder`, `LedgerReferenceTrade`,
+`LedgerReferenceTransfer`, `LedgerReferenceAdjustment`, `LedgerReferencePool`,
+`LedgerReferenceFuturesTransfer` and `LedgerReferenceSystem` (all in `cexy.models`). A `type` this
+SDK version does not know yet, or a reference whose fields don't match its `type` (a missing
+field, or one of the wrong type), decodes to
+`LedgerReferenceUnknown` with every field kept, so a new server-side cause never breaks decoding.
+
+```python
+from cexy.models import LedgerReferenceOrder, LedgerReferenceUnknown
+
+for entry in client.account.ledger().auto_paging_iter():
+    ref = entry.reference
+    if isinstance(ref, LedgerReferenceOrder):
+        print(entry.kind, "order", ref.order_id)
+    elif isinstance(ref, LedgerReferenceUnknown):
+        print(entry.kind, "unrecognised cause", ref.model_dump())
+```
+
+Ids (`order_id`, `pool_id`, ...) are plain strings; the SDK does not check their format.
 
 ## Errors
 

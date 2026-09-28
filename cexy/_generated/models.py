@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Annotated, Any, Dict, List, Optional, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Type, Union
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Discriminator, Field, Tag, ValidationError, model_validator
 
 from cexy._enum import OpenEnum
 
@@ -241,6 +241,7 @@ class ErrorCode(OpenEnum):
     WITHDRAWAL_DISABLED = "WITHDRAWAL_DISABLED"
     SELF_TRADE_BLOCKED = "SELF_TRADE_BLOCKED"
     LIMIT_EXCEEDED = "LIMIT_EXCEEDED"
+    PRICE_UNAVAILABLE = "PRICE_UNAVAILABLE"
     RATE_LIMITED = "RATE_LIMITED"
     INTERNAL = "INTERNAL"
     SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
@@ -335,8 +336,7 @@ class JoinPoolRequest(BaseModel):
     max_ratio_deviation_percent: Annotated[
         Optional[Decimal],
         Field(
-            description="How far, in percent, the offered ratio may sit from the pool's own before the request is refused rather than repriced. Defaults to 1%.",
-            examples=["1"],
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
         ),
     ] = None
     quote_amount: Annotated[
@@ -401,6 +401,9 @@ class LedgerEntryKind(OpenEnum):
     TRADE_FEE = "trade_fee"
     TRANSFER_OUT = "transfer_out"
     TRANSFER_IN = "transfer_in"
+    TRANSFER_IN_HELD = "transfer_in_held"
+    TRANSFER_RELEASE = "transfer_release"
+    TRANSFER_REVERSAL = "transfer_reversal"
     ADJUSTMENT_CREDIT = "adjustment_credit"
     ADJUSTMENT_DEBIT = "adjustment_debit"
     REBATE = "rebate"
@@ -412,6 +415,8 @@ class LedgerEntryKind(OpenEnum):
     FUTURES_COLLATERAL_RETURNED = "futures_collateral_returned"
     TRADE_FEE_REVENUE = "trade_fee_revenue"
     WITHDRAWAL_FEE_REVENUE = "withdrawal_fee_revenue"
+    WITHDRAWAL_REFUND = "withdrawal_refund"
+    WITHDRAWAL_FEE_REVENUE_REVERSAL = "withdrawal_fee_revenue_reversal"
     FUTURES_TRANSFER_FEE_REVENUE = "futures_transfer_fee_revenue"
     FUTURES_HYPERLIQUID_COST = "futures_hyperliquid_cost"
     FUTURES_TRANSFER_DISCREPANCY = "futures_transfer_discrepancy"
@@ -454,7 +459,10 @@ class LedgerEntryResponse(BaseModel):
             description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
         ),
     ]
-    reference: Annotated[Any, Field(description="What caused the entry.")]
+    reference: Annotated[
+        LedgerReference,
+        Field(description="What caused a ledger entry: one kind of cause per variant, told apart by `type`."),
+    ]
     sequence: Annotated[int, Field(description="Position in this account's history for this asset.")]
 
 
@@ -822,6 +830,173 @@ class WithdrawalStatus(OpenEnum):
     CANCELLED = "cancelled"
     FAILED = "failed"
     BROADCAST_UNKNOWN = "broadcast_unknown"
+    REVERTED = "reverted"
+
+
+class LedgerReferenceDeposit(BaseModel):
+    """
+    A blockchain deposit.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    deposit_id: Annotated[
+        str,
+        Field(
+            description="Unique identifier of a deposit.",
+            examples=["507f1f77bcf86cd799439011"],
+        ),
+    ]
+    type: Literal["deposit"]
+
+
+class LedgerReferenceWithdrawal(BaseModel):
+    """
+    A withdrawal request.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    type: Literal["withdrawal"]
+    withdrawal_id: Annotated[
+        str,
+        Field(
+            description="Unique identifier of a withdrawal.",
+            examples=["507f1f77bcf86cd799439011"],
+        ),
+    ]
+
+
+class LedgerReferenceOrder(BaseModel):
+    """
+    An order reservation or release.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    order_id: Annotated[
+        str,
+        Field(
+            description="Unique identifier of an order.",
+            examples=["507f1f77bcf86cd799439011"],
+        ),
+    ]
+    type: Literal["order"]
+
+
+class LedgerReferenceTrade(BaseModel):
+    """
+    A trade settlement.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    order_id: Annotated[
+        str,
+        Field(
+            description="Unique identifier of an order.",
+            examples=["507f1f77bcf86cd799439011"],
+        ),
+    ]
+    trade_id: Annotated[
+        str,
+        Field(
+            description="Unique identifier of a trade.",
+            examples=["507f1f77bcf86cd799439011"],
+        ),
+    ]
+    type: Literal["trade"]
+
+
+class LedgerReferenceTransfer(BaseModel):
+    """
+    An internal transfer between accounts.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    counterparty_user_id: Annotated[
+        str,
+        Field(
+            description="Unique identifier of a user account.",
+            examples=["507f1f77bcf86cd799439011"],
+        ),
+    ]
+    transfer_ref: Annotated[str, Field(description="Shared reference linking both halves.")]
+    type: Literal["transfer"]
+
+
+class LedgerReferenceAdjustment(BaseModel):
+    """
+    A manual operator adjustment. Always accompanied by an audit event.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    operator_user_id: Annotated[
+        str,
+        Field(
+            description="Unique identifier of a user account.",
+            examples=["507f1f77bcf86cd799439011"],
+        ),
+    ]
+    type: Literal["adjustment"]
+
+
+class LedgerReferencePool(BaseModel):
+    """
+    A liquidity pool join or exit.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    pool_id: Annotated[
+        str,
+        Field(
+            description="Unique identifier of a liquidity pool.",
+            examples=["507f1f77bcf86cd799439011"],
+        ),
+    ]
+    type: Literal["pool"]
+
+
+class LedgerReferenceFuturesTransfer(BaseModel):
+    """
+    A movement of collateral to or from a futures account.
+
+    Every entry a transfer produces carries the same one, so the reservation, the release and the completion can be read back as one event — which is what an operator resolving an ambiguous transfer needs.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    futures_transfer_id: Annotated[
+        str,
+        Field(
+            description="Unique identifier of a futures collateral transfer.",
+            examples=["507f1f77bcf86cd799439011"],
+        ),
+    ]
+    type: Literal["futures_transfer"]
+
+
+class LedgerReferenceSystem(BaseModel):
+    """
+    A system-originated credit with no user counterparty (rebate, promotion).
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    cause: Annotated[str, Field(description="Short machine-readable cause.")]
+    type: Literal["system"]
 
 
 class ApiKeyResponse(BaseModel):
@@ -1512,3 +1687,93 @@ class WithdrawalResponse(BaseModel):
     network: Annotated[str, Field(description="Network code.")]
     status: WithdrawalStatus
     txid: Annotated[Optional[str], Field(description="Transaction hash, once broadcast.")] = None
+
+
+# Ids are plain strings: the SDK does not check their format.
+DepositId = str
+FuturesTransferId = str
+OrderId = str
+PoolId = str
+TradeId = str
+UserId = str
+WithdrawalId = str
+
+
+class LedgerReferenceUnknown(BaseModel):
+    """A cause this SDK version does not know (a newer `type`, or an unexpected shape). Every
+    field the server sent is kept; `raw` holds a value that was not an object."""
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    type: Optional[Any] = None
+    raw: Optional[Any] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _wrap(cls, value: Any) -> Any:
+        return value if isinstance(value, dict) else {"raw": value}
+
+
+# The variant each known `type` decodes to.
+_LEDGER_REFERENCE_VARIANTS: Dict[str, Type[BaseModel]] = {
+    "adjustment": LedgerReferenceAdjustment,
+    "deposit": LedgerReferenceDeposit,
+    "futures_transfer": LedgerReferenceFuturesTransfer,
+    "order": LedgerReferenceOrder,
+    "pool": LedgerReferencePool,
+    "system": LedgerReferenceSystem,
+    "trade": LedgerReferenceTrade,
+    "transfer": LedgerReferenceTransfer,
+    "withdrawal": LedgerReferenceWithdrawal,
+}
+
+
+def _ledger_reference_tag(value: Any) -> str:
+    """Pick the variant. A known `type` is chosen only if its data validates as that variant
+    (required keys present, fields of the right types); otherwise "unknown", so that a malformed
+    reference is kept as LedgerReferenceUnknown instead of failing the whole entry."""
+    if isinstance(value, BaseModel):
+        if isinstance(value, LedgerReferenceUnknown):
+            return "unknown"
+        tag = getattr(value, "type", None)
+        return tag if isinstance(tag, str) and tag in _LEDGER_REFERENCE_VARIANTS else "unknown"
+    if isinstance(value, dict):
+        tag = value.get("type")
+        variant = _LEDGER_REFERENCE_VARIANTS.get(tag) if isinstance(tag, str) else None
+        if variant is not None:
+            try:
+                variant.model_validate(value)
+            except ValidationError:
+                return "unknown"
+            return tag  # type: ignore[return-value]
+    return "unknown"
+
+
+LedgerReference = Annotated[
+    Union[
+        Annotated[LedgerReferenceAdjustment, Tag("adjustment")],
+        Annotated[LedgerReferenceDeposit, Tag("deposit")],
+        Annotated[LedgerReferenceFuturesTransfer, Tag("futures_transfer")],
+        Annotated[LedgerReferenceOrder, Tag("order")],
+        Annotated[LedgerReferencePool, Tag("pool")],
+        Annotated[LedgerReferenceSystem, Tag("system")],
+        Annotated[LedgerReferenceTrade, Tag("trade")],
+        Annotated[LedgerReferenceTransfer, Tag("transfer")],
+        Annotated[LedgerReferenceWithdrawal, Tag("withdrawal")],
+        Annotated[LedgerReferenceUnknown, Tag("unknown")],
+    ],
+    Discriminator(_ledger_reference_tag),
+]
+"""What caused a ledger entry, told apart by `type`. Unknown or malformed causes decode to
+LedgerReferenceUnknown instead of failing."""
+
+
+for _model in list(globals().values()):
+    if (
+        isinstance(_model, type)
+        and issubclass(_model, BaseModel)
+        and _model is not BaseModel
+        and not _model.__pydantic_complete__
+    ):
+        _model.model_rebuild()
