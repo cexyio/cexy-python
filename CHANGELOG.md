@@ -3,7 +3,29 @@
 All notable changes to this project are documented here. The SDK stays at 0.x until API
 request signing (HMAC) ships; see "Versioning" in README.md.
 
-## Unreleased
+## 0.1.0.dev6 (2026-09-28)
+
+Synced with the API's H-1 release.
+
+### Added
+- `LedgerEntryResponse.reference` is typed: a union told apart by `type` (`LedgerReferenceDeposit`,
+  `LedgerReferenceWithdrawal`, `LedgerReferenceOrder`, `LedgerReferenceTrade`,
+  `LedgerReferenceTransfer`, `LedgerReferenceAdjustment`, `LedgerReferencePool`,
+  `LedgerReferenceFuturesTransfer`, `LedgerReferenceSystem`), exported with the `LedgerReference`
+  alias from `cexy.models`. An unknown `type`, a reference missing a required field, or a value that
+  is not an object decodes to `LedgerReferenceUnknown` (all fields kept) instead of failing.
+- Id aliases `DepositId`, `FuturesTransferId`, `OrderId`, `PoolId`, `TradeId`, `UserId`,
+  `WithdrawalId`: plain `str`, with no client-side format check.
+- Error code `PRICE_UNAVAILABLE` (HTTP 422, raised as `UnprocessableError`).
+- `WithdrawalStatus.REVERTED`, a withdrawal that failed on chain and was refunded. New
+  `LedgerEntryKind` values: `transfer_in_held`, `transfer_release`, `transfer_reversal`,
+  `withdrawal_refund`, `withdrawal_fee_revenue_reversal`.
+
+### Changed
+- `JoinPoolRequest.max_ratio_deviation_percent` is an amount in the spec now; it was already a
+  `Decimal` here.
+- `cancel_all` also cancels stop orders that have not triggered yet (`pending_trigger`), releasing
+  their reservations (server behaviour since H-1; docstring and README say so).
 
 ### Fixed
 - `cancel_all(until_done=True)`: a wait imposed by the client rate limiter (for example after a

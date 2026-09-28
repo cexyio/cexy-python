@@ -1788,8 +1788,8 @@
         "tags": [
           "trading"
         ],
-        "summary": "Cancels every open order, optionally within one market.",
-        "description": "Best-effort: a failure on one order does not stop the rest, and every outcome is reported. A panic-button endpoint that stops at the first problem is worse than useless.\n\nAn order still being placed when the call starts (status `pending`, for as long as its own placement request runs) is waited for, up to 500 ms per call in total: cancelled if it opens, reported in `already_closed` if it fills or is refused, and in `failed` with code `INVALID_STATE` if it is still being placed at the deadline. Orders placed after the call starts are not part of it. At most 500 orders per call; `has_more` says there are others.\n\nLimited to 30 calls a minute per account, on top of the general request limit.",
+        "summary": "Cancels every open order, and every stop order that has not triggered, optionally within",
+        "description": "one market.\n\nBest-effort: a failure on one order does not stop the rest, and every outcome is reported. A panic-button endpoint that stops at the first problem is worse than useless. A stop waiting for its trigger (`pending_trigger`) is cancelled too and its reservation released, so nothing fires into the market after the call.\n\nAn order still being placed when the call starts (status `pending`, for as long as its own placement request runs) is waited for, up to 500 ms per call in total: cancelled if it opens, reported in `already_closed` if it fills or is refused, and in `failed` with code `INVALID_STATE` if it is still being placed at the deadline. Orders placed after the call starts are not part of it. At most 500 orders per call; `has_more` says there are others.\n\nLimited to 30 calls a minute per account, on top of the general request limit.",
         "operationId": "cancel_all",
         "requestBody": {
           "content": {
@@ -3105,6 +3105,14 @@
           }
         }
       },
+      "DepositId": {
+        "type": "string",
+        "description": "Unique identifier of a deposit.",
+        "example": "507f1f77bcf86cd799439011",
+        "maxLength": 24,
+        "minLength": 24,
+        "pattern": "^[0-9a-fA-F]{24}$"
+      },
       "DepositResponse": {
         "type": "object",
         "description": "A deposit.",
@@ -3309,6 +3317,7 @@
           "WITHDRAWAL_DISABLED",
           "SELF_TRADE_BLOCKED",
           "LIMIT_EXCEEDED",
+          "PRICE_UNAVAILABLE",
           "RATE_LIMITED",
           "INTERNAL",
           "SERVICE_UNAVAILABLE",
@@ -3549,6 +3558,14 @@
           }
         }
       },
+      "FuturesTransferId": {
+        "type": "string",
+        "description": "Unique identifier of a futures collateral transfer.",
+        "example": "507f1f77bcf86cd799439011",
+        "maxLength": 24,
+        "minLength": 24,
+        "pattern": "^[0-9a-fA-F]{24}$"
+      },
       "JoinPoolRequest": {
         "type": "object",
         "description": "Adds liquidity to a pool.",
@@ -3561,9 +3578,11 @@
             "$ref": "#/components/schemas/Amount"
           },
           "max_ratio_deviation_percent": {
-            "type": "string",
-            "description": "How far, in percent, the offered ratio may sit from the pool's own before the request is refused rather than repriced. Defaults to 1%.",
-            "example": "1",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Amount"
+              }
+            ],
             "nullable": true
           },
           "quote_amount": {
@@ -3614,6 +3633,9 @@
           "trade_fee",
           "transfer_out",
           "transfer_in",
+          "transfer_in_held",
+          "transfer_release",
+          "transfer_reversal",
           "adjustment_credit",
           "adjustment_debit",
           "rebate",
@@ -3625,6 +3647,8 @@
           "futures_collateral_returned",
           "trade_fee_revenue",
           "withdrawal_fee_revenue",
+          "withdrawal_refund",
+          "withdrawal_fee_revenue_reversal",
           "futures_transfer_fee_revenue",
           "futures_hyperliquid_cost",
           "futures_transfer_discrepancy",
@@ -3676,13 +3700,202 @@
             "$ref": "#/components/schemas/Amount"
           },
           "reference": {
-            "description": "What caused the entry."
+            "$ref": "#/components/schemas/LedgerReference"
           },
           "sequence": {
             "type": "integer",
             "format": "int64",
             "description": "Position in this account's history for this asset."
           }
+        }
+      },
+      "LedgerReference": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A blockchain deposit.",
+            "required": [
+              "deposit_id",
+              "type"
+            ],
+            "properties": {
+              "deposit_id": {
+                "$ref": "#/components/schemas/DepositId"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "deposit"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A withdrawal request.",
+            "required": [
+              "withdrawal_id",
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "withdrawal"
+                ]
+              },
+              "withdrawal_id": {
+                "$ref": "#/components/schemas/WithdrawalId"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "An order reservation or release.",
+            "required": [
+              "order_id",
+              "type"
+            ],
+            "properties": {
+              "order_id": {
+                "$ref": "#/components/schemas/OrderId"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "order"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A trade settlement.",
+            "required": [
+              "trade_id",
+              "order_id",
+              "type"
+            ],
+            "properties": {
+              "order_id": {
+                "$ref": "#/components/schemas/OrderId"
+              },
+              "trade_id": {
+                "$ref": "#/components/schemas/TradeId"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "trade"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "An internal transfer between accounts.",
+            "required": [
+              "counterparty_user_id",
+              "transfer_ref",
+              "type"
+            ],
+            "properties": {
+              "counterparty_user_id": {
+                "$ref": "#/components/schemas/UserId"
+              },
+              "transfer_ref": {
+                "type": "string",
+                "description": "Shared reference linking both halves."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "transfer"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A manual operator adjustment. Always accompanied by an audit event.",
+            "required": [
+              "operator_user_id",
+              "type"
+            ],
+            "properties": {
+              "operator_user_id": {
+                "$ref": "#/components/schemas/UserId"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "adjustment"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A liquidity pool join or exit.",
+            "required": [
+              "pool_id",
+              "type"
+            ],
+            "properties": {
+              "pool_id": {
+                "$ref": "#/components/schemas/PoolId"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "pool"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A movement of collateral to or from a futures account.\n\nEvery entry a transfer produces carries the same one, so the reservation, the release and the completion can be read back as one event \u2014 which is what an operator resolving an ambiguous transfer needs.",
+            "required": [
+              "futures_transfer_id",
+              "type"
+            ],
+            "properties": {
+              "futures_transfer_id": {
+                "$ref": "#/components/schemas/FuturesTransferId"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "futures_transfer"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A system-originated credit with no user counterparty (rebate, promotion).",
+            "required": [
+              "cause",
+              "type"
+            ],
+            "properties": {
+              "cause": {
+                "type": "string",
+                "description": "Short machine-readable cause."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "system"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What caused a ledger entry: one kind of cause per variant, told apart by `type`.",
+        "discriminator": {
+          "propertyName": "type"
         }
       },
       "LiquidityRole": {
@@ -4021,6 +4234,14 @@
           }
         }
       },
+      "OrderId": {
+        "type": "string",
+        "description": "Unique identifier of an order.",
+        "example": "507f1f77bcf86cd799439011",
+        "maxLength": 24,
+        "minLength": 24,
+        "pattern": "^[0-9a-fA-F]{24}$"
+      },
       "OrderResponse": {
         "type": "object",
         "description": "An order.",
@@ -4315,6 +4536,14 @@
           }
         }
       },
+      "PoolId": {
+        "type": "string",
+        "description": "Unique identifier of a liquidity pool.",
+        "example": "507f1f77bcf86cd799439011",
+        "maxLength": 24,
+        "minLength": 24,
+        "pattern": "^[0-9a-fA-F]{24}$"
+      },
       "PoolResponse": {
         "type": "object",
         "description": "A pool as a client sees it.\n\nReserves are the custody account's balances, so they include liquidity currently locked in resting orders. `price` is the curve's mid, which sits between the pool's own best bid and ask by exactly its fee \u2014 it is not a traded price.",
@@ -4494,6 +4723,14 @@
           "post_only"
         ]
       },
+      "TradeId": {
+        "type": "string",
+        "description": "Unique identifier of a trade.",
+        "example": "507f1f77bcf86cd799439011",
+        "maxLength": 24,
+        "minLength": 24,
+        "pattern": "^[0-9a-fA-F]{24}$"
+      },
       "TriggerDirection": {
         "type": "string",
         "description": "Which way the price must move for a stop to fire.\n\nExplicit rather than inferred from the side, because the inference is ambiguous: a sell stop below the market is a stop-loss, and a sell stop above it is a take-profit. Both are legitimate, and guessing wrong means an order that fires at exactly the wrong moment \u2014 which is the one thing a protective order must never do.",
@@ -4501,6 +4738,14 @@
           "above",
           "below"
         ]
+      },
+      "UserId": {
+        "type": "string",
+        "description": "Unique identifier of a user account.",
+        "example": "507f1f77bcf86cd799439011",
+        "maxLength": 24,
+        "minLength": 24,
+        "pattern": "^[0-9a-fA-F]{24}$"
       },
       "WithdrawalAddressResponse": {
         "type": "object",
@@ -4579,6 +4824,14 @@
             "$ref": "#/components/schemas/WithdrawalStatus"
           }
         }
+      },
+      "WithdrawalId": {
+        "type": "string",
+        "description": "Unique identifier of a withdrawal.",
+        "example": "507f1f77bcf86cd799439011",
+        "maxLength": 24,
+        "minLength": 24,
+        "pattern": "^[0-9a-fA-F]{24}$"
       },
       "WithdrawalResponse": {
         "type": "object",
@@ -4691,7 +4944,8 @@
           "rejected",
           "cancelled",
           "failed",
-          "broadcast_unknown"
+          "broadcast_unknown",
+          "reverted"
         ]
       }
     },

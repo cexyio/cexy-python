@@ -169,6 +169,7 @@ for _cls, _codes in {
         "WITHDRAWAL_DISABLED",
         "SELF_TRADE_BLOCKED",
         "LIMIT_EXCEEDED",
+        "PRICE_UNAVAILABLE",
     ),
     RateLimitError: ("RATE_LIMITED",),
     ServerError: ("INTERNAL", "SERVICE_UNAVAILABLE", "UNDER_MAINTENANCE", "ENGINE_OVERLOADED"),

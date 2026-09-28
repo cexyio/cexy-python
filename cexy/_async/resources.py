@@ -479,7 +479,8 @@ class AsyncTrading(_Resource):
         max_rounds: int = 20,
         time_budget: float = 120.0,
     ) -> Union[m.CancelAllResponse, CancelAllResult]:
-        """Cancel every open order in ``symbol``.
+        """Cancel every open order in ``symbol``, including stop orders that have not triggered
+        yet (status ``pending_trigger``; their reservations are released).
 
         ``symbol`` is a required keyword so that cancelling everywhere is always explicit:
         ``symbol=None`` cancels open orders in ALL markets. Repeating the call is harmless (it
