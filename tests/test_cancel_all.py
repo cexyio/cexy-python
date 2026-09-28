@@ -246,3 +246,54 @@ def test_network_failure_is_a_round_without_progress() -> None:
     fc = FakeClock()
     res = sync_client(fc).trading.cancel_all(symbol=None, until_done=True)
     assert route.call_count == 2 and fc.sleeps == [1.0] and res.cancelled == ["o1"] and res.rounds == 2
+
+
+def _limited_round() -> httpx.Response:
+    # A successful round that also says the account's request window is used up for 170 s.
+    return httpx.Response(
+        200,
+        json={"data": done(cancelled=["o1"], has_more=True)},
+        headers={"X-RateLimit-Limit": "600", "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "170"},
+    )
+
+
+@respx.mock
+def test_a_rate_limiter_block_counts_against_the_budget_sync() -> None:
+    route = respx.post(URL).mock(side_effect=[_limited_round()])
+    fc = FakeClock()
+    with sync_client(fc) as client:
+        res = client.trading.cancel_all(symbol=None, until_done=True, time_budget=120.0)
+    assert route.call_count == 1
+    assert fc.now < 120.0 and fc.sleeps == []
+    assert res.stopped == "time_budget" and res.last_error_code == "RATE_LIMITED"
+    assert res.cancelled == ["o1"] and res.rounds == 1
+
+
+def test_a_rate_limiter_block_counts_against_the_budget_async() -> None:
+    async def run() -> None:
+        with respx.mock:
+            route = respx.post(URL).mock(side_effect=[_limited_round()])
+            fc = FakeClock()
+            async with async_client(fc) as client:
+                res = await client.trading.cancel_all(symbol=None, until_done=True, time_budget=120.0)
+            assert route.call_count == 1
+            assert fc.now < 120.0 and fc.sleeps == []
+            assert res.stopped == "time_budget" and res.last_error_code == "RATE_LIMITED"
+            assert res.cancelled == ["o1"] and res.rounds == 1
+
+    asyncio.run(run())
+
+
+@respx.mock
+def test_a_short_rate_limiter_block_is_waited_within_the_budget() -> None:
+    first = httpx.Response(
+        200,
+        json={"data": done(cancelled=["o1"], has_more=True)},
+        headers={"X-RateLimit-Limit": "600", "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "5"},
+    )
+    route = respx.post(URL).mock(side_effect=[first, httpx.Response(200, json={"data": done(cancelled=["o2"])})])
+    fc = FakeClock()
+    with sync_client(fc) as client:
+        res = client.trading.cancel_all(symbol=None, until_done=True, time_budget=120.0)
+    assert route.call_count == 2 and res.stopped == "done"
+    assert 5.0 <= fc.now < 120.0
