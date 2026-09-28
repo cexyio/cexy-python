@@ -53,6 +53,21 @@ jobs:
           scripts/sync_spec.sh .cexy-api-spec --check
           cmp tools/scan_internal.py .cexy-api-spec/tools/scan_internal.py
 
+  consumer:
+    # Installs the built wheel and sdist the way users get them (fresh venv, no extras, no dev
+    # dependencies) and runs an offline smoke check. Live calls only with CEXY_LIVE_TESTS=1.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: {persist-credentials: false}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with: {python-version: "3.12"}
+      - run: pip install build==1.2.2
+      - name: Build (same command as publish.yml)
+        run: python -m build
+      - name: Install each distribution into a fresh venv and smoke-test it
+        run: ci/consumer/check.sh dist
+
   security:
     runs-on: ubuntu-latest
     steps:

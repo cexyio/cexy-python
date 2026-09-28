@@ -508,6 +508,12 @@ class Trading(_Resource):
         deadline = self._t._clock() + time_budget
         streak, rounds = 0, 0
         while True:
+            if rounds > 0:
+                # The client rate limiter may make the next request wait (e.g. after a response with
+                # X-RateLimit-Remaining 0). That wait counts against the budget like any other.
+                pending = self._t.limiter.pending_wait()
+                if pending > 0 and self._t._clock() + pending >= deadline:
+                    return merge.result(rounds, "time_budget", "RATE_LIMITED")
             rounds += 1
             try:
                 r = self._cancel_all_once(symbol, max_retries=0)

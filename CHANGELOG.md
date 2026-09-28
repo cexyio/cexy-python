@@ -3,7 +3,20 @@
 All notable changes to this project are documented here. The SDK stays at 0.x until API
 request signing (HMAC) ships; see "Versioning" in README.md.
 
-## 0.1.0.dev5 (unreleased)
+## Unreleased
+
+### Fixed
+- `cancel_all(until_done=True)`: a wait imposed by the client rate limiter (for example after a
+  response with `X-RateLimit-Remaining: 0` and a `X-RateLimit-Reset`) now counts against
+  `time_budget`. If it would reach the budget, the loop stops with `stopped="time_budget"` and
+  `last_error_code="RATE_LIMITED"` instead of making the next request late.
+
+### CI
+- New `consumer` job, also run by the publish build job: the wheel and the sdist are each
+  installed into a fresh venv (no extras, no dev dependencies) and smoke-tested from outside the
+  repository (`ci/consumer/`), so a packaging or dependency gap can't hide behind the dev setup.
+
+## 0.1.0.dev5 (2026-09-27)
 
 ### Fixed
 - **Server-controlled waits are bounded.** `Retry-After` (seconds or HTTP-date),

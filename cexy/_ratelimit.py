@@ -53,6 +53,16 @@ class TokenBucket:
                 wait = max(wait, -self.tokens / self.rate)
             return min(wait, MAX_WAIT_S)
 
+    def pending_wait(self) -> float:
+        """How long the next ``acquire()`` would make the caller sleep, without taking a token."""
+        with self._lock:
+            now = self._clock()
+            self._refill(now)
+            wait = max(0.0, self._blocked_until - now)
+            if self.tokens < 1.0:
+                wait = max(wait, (1.0 - self.tokens) / self.rate)
+            return min(wait, MAX_WAIT_S)
+
     def update_from_headers(self, headers: Mapping[str, str]) -> None:
         """Adapt to ``X-RateLimit-Remaining`` and ``X-RateLimit-Reset`` (case-insensitive keys)."""
         low = {k.lower(): v for k, v in headers.items()}

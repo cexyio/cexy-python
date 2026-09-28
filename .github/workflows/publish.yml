@@ -27,6 +27,8 @@ jobs:
       - run: pytest -q
       - name: Build
         run: python -m build
+      - name: Install each distribution into a fresh venv and smoke-test it (consumer check)
+        run: ci/consumer/check.sh dist
       - name: Check the distributions (same twine as the publish action)
         run: |
           pip install twine==7.0.0 packaging==26.2
