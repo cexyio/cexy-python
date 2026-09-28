@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Type, Union
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Discriminator, Field, Tag, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Discriminator, Field, Tag, ValidationError, model_validator
 
 from cexy._enum import OpenEnum
 
@@ -1706,7 +1706,7 @@ class LedgerReferenceUnknown(BaseModel):
     model_config = ConfigDict(
         extra="allow",
     )
-    type: Optional[str] = None
+    type: Optional[Any] = None
     raw: Optional[Any] = None
 
     @model_validator(mode="before")
@@ -1715,29 +1715,38 @@ class LedgerReferenceUnknown(BaseModel):
         return value if isinstance(value, dict) else {"raw": value}
 
 
-# The keys each known `type` must carry to decode as its variant.
-_LEDGER_REFERENCE_REQUIRED: Dict[str, Tuple[str, ...]] = {
-    "adjustment": ("operator_user_id", "type"),
-    "deposit": ("deposit_id", "type"),
-    "futures_transfer": ("futures_transfer_id", "type"),
-    "order": ("order_id", "type"),
-    "pool": ("pool_id", "type"),
-    "system": ("cause", "type"),
-    "trade": ("trade_id", "order_id", "type"),
-    "transfer": ("counterparty_user_id", "transfer_ref", "type"),
-    "withdrawal": ("withdrawal_id", "type"),
+# The variant each known `type` decodes to.
+_LEDGER_REFERENCE_VARIANTS: Dict[str, Type[BaseModel]] = {
+    "adjustment": LedgerReferenceAdjustment,
+    "deposit": LedgerReferenceDeposit,
+    "futures_transfer": LedgerReferenceFuturesTransfer,
+    "order": LedgerReferenceOrder,
+    "pool": LedgerReferencePool,
+    "system": LedgerReferenceSystem,
+    "trade": LedgerReferenceTrade,
+    "transfer": LedgerReferenceTransfer,
+    "withdrawal": LedgerReferenceWithdrawal,
 }
 
 
 def _ledger_reference_tag(value: Any) -> str:
+    """Pick the variant. A known `type` is chosen only if its data validates as that variant
+    (required keys present, fields of the right types); otherwise "unknown", so that a malformed
+    reference is kept as LedgerReferenceUnknown instead of failing the whole entry."""
     if isinstance(value, BaseModel):
         if isinstance(value, LedgerReferenceUnknown):
             return "unknown"
-        return str(getattr(value, "type", None) or "unknown")
+        tag = getattr(value, "type", None)
+        return tag if isinstance(tag, str) and tag in _LEDGER_REFERENCE_VARIANTS else "unknown"
     if isinstance(value, dict):
-        required = _LEDGER_REFERENCE_REQUIRED.get(value.get("type"))  # type: ignore[arg-type]
-        if required is not None and all(key in value for key in required):
-            return str(value["type"])
+        tag = value.get("type")
+        variant = _LEDGER_REFERENCE_VARIANTS.get(tag) if isinstance(tag, str) else None
+        if variant is not None:
+            try:
+                variant.model_validate(value)
+            except ValidationError:
+                return "unknown"
+            return tag  # type: ignore[return-value]
     return "unknown"
 
 

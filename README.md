@@ -127,7 +127,8 @@ before anything is sent, because a float cannot represent most decimal amounts e
 `LedgerReferenceDeposit`, `LedgerReferenceWithdrawal`, `LedgerReferenceOrder`, `LedgerReferenceTrade`,
 `LedgerReferenceTransfer`, `LedgerReferenceAdjustment`, `LedgerReferencePool`,
 `LedgerReferenceFuturesTransfer` and `LedgerReferenceSystem` (all in `cexy.models`). A `type` this
-SDK version does not know yet, or a reference missing a field its `type` requires, decodes to
+SDK version does not know yet, or a reference whose fields don't match its `type` (a missing
+field, or one of the wrong type), decodes to
 `LedgerReferenceUnknown` with every field kept, so a new server-side cause never breaks decoding.
 
 ```python

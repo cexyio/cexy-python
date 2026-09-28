@@ -82,9 +82,10 @@ def hoist_ledger_reference(schemas: dict) -> None:
 
 
 def ledger_reference_block() -> str:
-    """The tolerant union: a known `type` with all its required keys decodes to its variant;
-    anything else (a newer `type`, a missing key, not an object) to LedgerReferenceUnknown."""
-    tags = ",\n".join(f'    "{tag}": {keys!r}' for tag, (_, keys) in sorted(LEDGER_VARIANTS.items()))
+    """The tolerant union: a known `type` whose data validates as that variant decodes to it;
+    anything else (a newer `type`, a missing key, a field of the wrong type, not an object) to
+    LedgerReferenceUnknown. Decoding never raises (CexyQA)."""
+    tags = ",\n".join(f'    "{tag}": {name}' for tag, (name, _) in sorted(LEDGER_VARIANTS.items()))
     members = "".join(
         f'        Annotated[{name}, Tag("{tag}")],\n' for tag, (name, _) in sorted(LEDGER_VARIANTS.items())
     )
@@ -95,7 +96,7 @@ def ledger_reference_block() -> str:
     model_config = ConfigDict(
         extra="allow",
     )
-    type: Optional[str] = None
+    type: Optional[Any] = None
     raw: Optional[Any] = None
 
     @model_validator(mode="before")
@@ -104,21 +105,30 @@ def ledger_reference_block() -> str:
         return value if isinstance(value, dict) else {{"raw": value}}
 
 
-# The keys each known `type` must carry to decode as its variant.
-_LEDGER_REFERENCE_REQUIRED: Dict[str, Tuple[str, ...]] = {{
+# The variant each known `type` decodes to.
+_LEDGER_REFERENCE_VARIANTS: Dict[str, Type[BaseModel]] = {{
 {tags},
 }}
 
 
 def _ledger_reference_tag(value: Any) -> str:
+    """Pick the variant. A known `type` is chosen only if its data validates as that variant
+    (required keys present, fields of the right types); otherwise "unknown", so that a malformed
+    reference is kept as LedgerReferenceUnknown instead of failing the whole entry."""
     if isinstance(value, BaseModel):
         if isinstance(value, LedgerReferenceUnknown):
             return "unknown"
-        return str(getattr(value, "type", None) or "unknown")
+        tag = getattr(value, "type", None)
+        return tag if isinstance(tag, str) and tag in _LEDGER_REFERENCE_VARIANTS else "unknown"
     if isinstance(value, dict):
-        required = _LEDGER_REFERENCE_REQUIRED.get(value.get("type"))  # type: ignore[arg-type]
-        if required is not None and all(key in value for key in required):
-            return str(value["type"])
+        tag = value.get("type")
+        variant = _LEDGER_REFERENCE_VARIANTS.get(tag) if isinstance(tag, str) else None
+        if variant is not None:
+            try:
+                variant.model_validate(value)
+            except ValidationError:
+                return "unknown"
+            return tag  # type: ignore[return-value]
     return "unknown"
 
 
@@ -212,8 +222,10 @@ def postprocess_ledger_reference(text: str) -> str:
         raise SystemExit("generate.py: LedgerEntryResponse.reference field not found")
     text = new
     # Imports the block needs (ruff drops the unused ones afterwards).
-    text = _add_imports(text, "typing", {"Annotated", "Any", "Dict", "Optional", "Tuple", "Union"})
-    return _add_imports(text, "pydantic", {"BaseModel", "ConfigDict", "Discriminator", "Tag", "model_validator"})
+    text = _add_imports(text, "typing", {"Annotated", "Any", "Dict", "Optional", "Type", "Union"})
+    return _add_imports(
+        text, "pydantic", {"BaseModel", "ConfigDict", "Discriminator", "Tag", "ValidationError", "model_validator"}
+    )
 
 
 def _add_imports(text: str, module: str, names: set) -> str:

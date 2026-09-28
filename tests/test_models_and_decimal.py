@@ -164,3 +164,44 @@ def test_join_pool_deviation_is_decimal() -> None:
         {"base_amount": "1", "quote_amount": "2", "max_ratio_deviation_percent": "0.5"}
     )
     assert req.max_ratio_deviation_percent == Decimal("0.5")
+
+
+_BAD_FIELD_TYPES = [
+    {"type": "deposit", "deposit_id": 123},  # number where a string is expected
+    {"type": "trade", "trade_id": ["t1"], "order_id": "o1"},  # list where a string is expected
+    {"type": "system", "cause": {"nested": True}},  # object where a string is expected
+    {"type": "transfer", "counterparty_user_id": None, "transfer_ref": "r"},  # null required string
+    {"type": 5, "deposit_id": "d1"},  # a non-string type
+    {"type": ["deposit"], "deposit_id": "d1"},  # an unhashable type
+]
+
+
+@pytest.mark.parametrize("reference", _BAD_FIELD_TYPES)
+def test_ledger_reference_known_type_with_bad_field_types_falls_back(reference: dict) -> None:
+    from cexy import models
+
+    entry = models.LedgerEntryResponse.model_validate({**_ENTRY, "reference": reference})
+    assert isinstance(entry.reference, models.LedgerReferenceUnknown)
+    assert entry.reference.model_dump() == {"raw": None, **reference}  # every field kept as sent
+    assert entry.id == "e1" and entry.kind == "deposit"  # the rest of the entry decodes normally
+
+
+@respx.mock
+def test_ledger_page_with_malformed_reference_decodes_sync(client: cexy.Client) -> None:
+    items = [{**_ENTRY, "id": f"e{i}", "reference": ref} for i, ref in enumerate(_BAD_FIELD_TYPES)]
+    items.append({**_ENTRY, "id": "ok", "reference": {"type": "order", "order_id": "o1"}})
+    respx.get(BASE + "/api/v1/account/ledger").respond(json={"items": items, "has_more": False})
+    page = client.account.ledger()
+    assert [type(e.reference).__name__ for e in page.items] == ["LedgerReferenceUnknown"] * len(_BAD_FIELD_TYPES) + [
+        "LedgerReferenceOrder"
+    ]
+
+
+async def test_ledger_page_with_malformed_reference_decodes_async() -> None:
+    items = [{**_ENTRY, "id": f"e{i}", "reference": ref} for i, ref in enumerate(_BAD_FIELD_TYPES)]
+    async with cexy.AsyncClient(api_key="ak_test_key", api_secret="test_secret") as client:
+        with respx.mock:
+            respx.get(BASE + "/api/v1/account/ledger").respond(json={"items": items, "has_more": False})
+            page = await client.account.ledger()
+    assert all(isinstance(e.reference, m.LedgerReferenceUnknown) for e in page.items)
+    assert page.items[0].reference.model_dump()["deposit_id"] == 123

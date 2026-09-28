@@ -12,8 +12,9 @@ Synced with the API's H-1 release.
   `LedgerReferenceWithdrawal`, `LedgerReferenceOrder`, `LedgerReferenceTrade`,
   `LedgerReferenceTransfer`, `LedgerReferenceAdjustment`, `LedgerReferencePool`,
   `LedgerReferenceFuturesTransfer`, `LedgerReferenceSystem`), exported with the `LedgerReference`
-  alias from `cexy.models`. An unknown `type`, a reference missing a required field, or a value that
-  is not an object decodes to `LedgerReferenceUnknown` (all fields kept) instead of failing.
+  alias from `cexy.models`. An unknown `type`, a reference missing a required field or with a field
+  of the wrong type, or a value that is not an object decodes to `LedgerReferenceUnknown` (all
+  fields kept) instead of failing: decoding a reference never raises.
 - Id aliases `DepositId`, `FuturesTransferId`, `OrderId`, `PoolId`, `TradeId`, `UserId`,
   `WithdrawalId`: plain `str`, with no client-side format check.
 - Error code `PRICE_UNAVAILABLE` (HTTP 422, raised as `UnprocessableError`).
