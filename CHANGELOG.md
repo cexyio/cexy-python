@@ -14,6 +14,19 @@ request signing (HMAC) ships; see "Versioning" in README.md.
   incoming internal transfers still held, at most 100, soonest first. Their sum is already included
   in `locked`: never add it again. A server that omits the field decodes as `[]`.
 
+### Changed
+- A 4xx response is never retried except 429 and 409 `CONCURRENT_MODIFICATION`, even when its body
+  says `retryable: true`. Those two are still retried only where they were before (when the server
+  marks them retryable). A mutation is retried only when it is repeat-safe: pool join/exit with their
+  `Idempotency-Key`, `place_order` (through its `client_order_id`), `cancel_order` and `cancel_all`;
+  any other mutation is sent once.
+
+### Security
+- Path values `"."` and `".."` are rejected with `ValueError`: previously they escaped their URL
+  segment, so e.g. `sub_account_balances("..")` returned the parent's own balances and
+  `order_by_client_id("..")` the open-orders list. Read-only operations only; no write request could
+  be redirected.
+
 ## 0.1.0.dev6 (2026-09-28)
 
 Synced with the API's H-1 release.

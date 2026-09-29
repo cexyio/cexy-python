@@ -242,11 +242,14 @@ class Account(_Resource):
     def sub_account_balances(self, id: str) -> List[m.BalanceResponse]:
         """A sub-account's balances, read by its PARENT account.
 
-        Same shape as :meth:`balances` (zero balances omitted, sorted by asset), including
-        ``held_incoming``, whose sum is already inside ``locked``. An id that is not one of the
-        caller's sub-accounts (or a call with the sub-account's own key) raises
+        Same shape as :meth:`balances` (zero balances omitted), including ``held_incoming``,
+        whose sum is already inside ``locked``. The server currently returns them ordered by
+        asset symbol; don't rely on the order. An id that is not one of the caller's
+        sub-accounts (or a call with the sub-account's own key) raises
         :class:`~cexy.NotFoundError` and is not retried; a sub-account's own key reads its
-        balances with :meth:`balances`. ``id`` must be non-empty (``ValueError`` before any
+        balances with :meth:`balances`. A malformed id gets 400 (:class:`~cexy.ValidationError`);
+        a key without the read scope gets 403 ``FORBIDDEN`` (:class:`~cexy.ForbiddenError`).
+        ``id`` must be non-empty and not ``"."`` or ``".."`` (``ValueError`` before any
         request); it is sent as one URL path segment.
         """
         payload = self._t.request("sub_account_balances", path={"id": id})

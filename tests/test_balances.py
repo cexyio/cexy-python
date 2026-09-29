@@ -6,6 +6,7 @@ import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
 
+import httpx
 import respx
 
 import cexy
@@ -109,3 +110,19 @@ def test_async_sub_account_balances() -> None:
                 assert rows[0].held_incoming == []
 
     asyncio.run(run())
+
+
+@respx.mock
+def test_sub_account_balances_404_without_retryable_or_json_is_not_found_once(client: cexy.Client) -> None:
+    for sub, resp in (
+        ("no-retryable", httpx.Response(404, json={"error": {"code": "NOT_FOUND", "message": "no such sub-account"}})),
+        ("html", httpx.Response(404, text="<html>not found</html>", headers={"content-type": "text/html"})),
+    ):
+        url = BASE + f"/api/v1/account/sub-accounts/{sub}/balances"
+        route = respx.get(url).mock(side_effect=[resp, httpx.Response(200, json={"data": []})])
+        try:
+            client.account.sub_account_balances(sub)
+            raise AssertionError("expected NotFoundError")
+        except cexy.NotFoundError:
+            pass
+        assert route.call_count == 1

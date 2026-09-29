@@ -68,6 +68,10 @@ def build_path(op: Operation, path_params: Optional[Mapping[str, str]]) -> str:
         value = (path_params or {}).get(name)
         if value is None or value == "":
             raise ValueError(f"{name} is required")
+        # "." and ".." would be dot segments: the URL layer resolves them (even as %2E), so the
+        # request would silently go to a different route.
+        if value in (".", ".."):
+            raise ValueError(f'{name} must not be "." or ".."')
         path = path.replace("{" + name + "}", quote(str(value), safe=""))
     return path
 
