@@ -52,3 +52,60 @@ def test_async_missing_field_defaults_to_empty_list() -> None:
             assert (await c.account.balances())[0].held_incoming == []
 
     asyncio.run(run())
+
+
+SUB = BASE + "/api/v1/account/sub-accounts/sub%2F1%20%3Fx/balances"
+
+
+@respx.mock
+def test_sub_account_balances_path_auth_and_held(client: cexy.Client) -> None:
+    route = respx.get(SUB).respond(json={"data": [dict(ROW, held_incoming=HELD)]})
+    (b,) = client.account.sub_account_balances("sub/1 ?x")
+    assert route.call_count == 1
+    req = route.calls.last.request
+    assert req.url.raw_path.startswith(b"/api/v1/account/sub-accounts/sub%2F1%20%3Fx/balances")
+    assert req.headers["X-API-Key"] == KEY
+    assert "Idempotency-Key" not in req.headers
+    assert [h.transfer_id for h in b.held_incoming] == ["a" * 24, "b" * 24]
+
+
+@respx.mock
+def test_sub_account_balances_missing_held_defaults(client: cexy.Client) -> None:
+    respx.get(BASE + "/api/v1/account/sub-accounts/sub_1/balances").respond(json={"data": [ROW]})
+    assert client.account.sub_account_balances("sub_1")[0].held_incoming == []
+
+
+@respx.mock
+def test_sub_account_balances_404_is_not_found_without_retry(client: cexy.Client) -> None:
+    route = respx.get(BASE + "/api/v1/account/sub-accounts/other/balances").respond(
+        404, json={"error": {"code": "NOT_FOUND", "message": "no such sub-account", "retryable": False}}
+    )
+    try:
+        client.account.sub_account_balances("other")
+        raise AssertionError("expected NotFoundError")
+    except cexy.NotFoundError:
+        pass
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_sub_account_balances_empty_id_rejected_before_request(client: cexy.Client) -> None:
+    route = respx.route().respond(200, json={"data": []})
+    for bad in ("",):
+        try:
+            client.account.sub_account_balances(bad)
+            raise AssertionError("expected ValueError")
+        except ValueError:
+            pass
+    assert route.call_count == 0
+
+
+def test_async_sub_account_balances() -> None:
+    async def run() -> None:
+        with respx.mock:
+            respx.get(BASE + "/api/v1/account/sub-accounts/sub_1/balances").respond(json={"data": [ROW]})
+            async with cexy.AsyncClient(api_key=KEY, api_secret=SECRET) as c:
+                rows = await c.account.sub_account_balances("sub_1")
+                assert rows[0].held_incoming == []
+
+    asyncio.run(run())

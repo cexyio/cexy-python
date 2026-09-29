@@ -44,6 +44,16 @@ OPERATIONS = {
     "list_sub_accounts": Operation(
         "list_sub_accounts", "GET", "/api/v1/account/sub-accounts", "api_key", "read", (), (), False
     ),
+    "sub_account_balances": Operation(
+        "sub_account_balances",
+        "GET",
+        "/api/v1/account/sub-accounts/{id}/balances",
+        "api_key",
+        "read",
+        ("id",),
+        (),
+        False,
+    ),
     "list_assets": Operation("list_assets", "GET", "/api/v1/assets", "none", "-", (), (), False),
     "get_asset": Operation("get_asset", "GET", "/api/v1/assets/{symbol}", "none", "-", ("symbol",), (), False),
     "exchange_config": Operation("exchange_config", "GET", "/api/v1/config", "none", "-", (), (), False),

@@ -3,9 +3,13 @@
 All notable changes to this project are documented here. The SDK stays at 0.x until API
 request signing (HMAC) ships; see "Versioning" in README.md.
 
-## Unreleased
+## 0.1.0.dev7 (2026-09-29)
 
 ### Added
+- `account.sub_account_balances(id)` (sync and async): a sub-account's balances, read by its parent
+  account (`GET /account/sub-accounts/{id}/balances`, read scope). Same shape as `balances()`,
+  including `held_incoming`. An id that is not the caller's sub-account raises `NotFoundError`
+  (not retried); an empty id raises `ValueError` before any request.
 - `BalanceResponse.held_incoming` (`HeldIncomingResponse`: `transfer_id`, `amount`, `available_at`):
   incoming internal transfers still held, at most 100, soonest first. Their sum is already included
   in `locked`: never add it again. A server that omits the field decodes as `[]`.
