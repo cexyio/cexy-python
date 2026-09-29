@@ -194,7 +194,8 @@ except UnprocessableError as err:
 `Client(max_retries=3, timeout=10)` retries with exponential backoff and full jitter:
 
 - **GET** requests retry on network errors, 429, 502/503/504 and any error with
-  `retryable: true`.
+  `retryable: true`. A 4xx is never retried except 429 and 409 `CONCURRENT_MODIFICATION`, whatever
+  its body says.
 - **429** waits for the larger of the `Retry-After` header and `details.retry_after_seconds`.
   These server hints are untrusted: unparseable, negative or non-finite values are ignored, and a
   requested wait **above 120 s is never waited**: the call raises `RateLimitError` at once (its

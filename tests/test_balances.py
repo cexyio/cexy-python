@@ -123,6 +123,6 @@ def test_sub_account_balances_404_without_retryable_or_json_is_not_found_once(cl
         try:
             client.account.sub_account_balances(sub)
             raise AssertionError("expected NotFoundError")
-        except cexy.NotFoundError:
-            pass
+        except cexy.NotFoundError as e:
+            assert e.retryable is False
         assert route.call_count == 1
