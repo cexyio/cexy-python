@@ -38,6 +38,10 @@ logger = logging.getLogger("cexy")
 _NOT_SENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
 #: 5xx statuses where the server may or may not have acted.
 _AMBIGUOUS_STATUS = frozenset({500, 502, 504})
+#: Mutations that are safe to repeat without an Idempotency-Key: place_order (its
+#: client_order_id makes the server refuse a repeat; see ``recover``), cancel_order and
+#: cancel_all (cancelling twice changes nothing more).
+REPEAT_SAFE_MUTATIONS = frozenset({"place_order", "cancel_order", "cancel_all"})
 
 
 class AsyncTransport:
@@ -95,11 +99,17 @@ class AsyncTransport:
         ``max_retries``: overrides the client's retry count for this call; ``cancel_all``'s
         until_done loop passes 0 and does its own retrying, so every HTTP request is one round.
 
+        A mutation is retried only when it is repeat-safe: it carries an ``Idempotency-Key``
+        (pool join/exit), or it is one of ``REPEAT_SAFE_MUTATIONS`` (place_order through its
+        ``client_order_id``, cancel_order and cancel_all). Any other mutation is sent once.
+
         A server-requested wait (Retry-After / ``retry_after_seconds``) longer than
         ``MAX_SERVER_WAIT_S`` (120 s) is never waited: the error is raised at once.
         """
         retries = self.policy.max_retries if max_retries is None else max(0, max_retries)
         op = operation(op_id)
+        if op.method != "GET" and idempotency_key is None and op_id not in REPEAT_SAFE_MUTATIONS:
+            retries = 0
         url = self.base_url + build_path(op, path)
         params = build_query(op, query)
         content = encode_body(body)

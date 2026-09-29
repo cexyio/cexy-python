@@ -28,6 +28,12 @@ class RetryPolicy:
 
     @staticmethod
     def is_retryable(err: CexyApiError) -> bool:
+        """A 4xx is never retryable except 429 and 409 CONCURRENT_MODIFICATION, whatever the body
+        says. A 429 is always retried; a 409 CONCURRENT_MODIFICATION only when the server marks
+        it retryable."""
+        concurrent = err.status == 409 and err.code == "CONCURRENT_MODIFICATION"
+        if 400 <= err.status < 500 and err.status != 429 and not concurrent:
+            return False
         return err.retryable or err.status in RETRYABLE_STATUS
 
     @staticmethod

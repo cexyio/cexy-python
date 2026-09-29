@@ -424,6 +424,77 @@
         "x-required-scope": "read"
       }
     },
+    "/api/v1/account/sub-accounts/{id}/balances": {
+      "get": {
+        "tags": [
+          "account"
+        ],
+        "summary": "A sub-account's balances, for its parent.",
+        "description": "The same shape as `/account/balances`, zero balances omitted: what the sub-account holds, so its funds can be shown and moved back. Only the parent may read it; any id that is not one of the caller's sub-accounts is not found.",
+        "operationId": "sub_account_balances",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Sub-account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sub-account's balances",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/BalanceResponse"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed sub-account id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such sub-account on this account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      }
+    },
     "/api/v1/assets": {
       "get": {
         "tags": [

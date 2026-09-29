@@ -8,7 +8,7 @@ Typed Python client for the [CEXY.io](https://cexy.io) exchange REST and WebSock
 - Client-side rate limiting, cursor pagination
 - WebSocket client with heartbeat, reconnect and a self-syncing order book
 
-> Status: **0.1.0.dev6, pre-release.** The API may change before 1.0 (see [Versioning](#versioning)).
+> Status: **0.1.0.dev7, pre-release.** The API may change before 1.0 (see [Versioning](#versioning)).
 > Pre-releases need `--pre`: `pip install --pre cexy`.
 
 ## Install
@@ -57,6 +57,10 @@ client = Client(api_key=os.environ["CEXY_API_KEY"], api_secret=os.environ["CEXY_
 for balance in client.account.balances():
     print(balance.asset, balance.available)
 
+# A sub-account's balances (parent account only; same shape, incl. held_incoming):
+for balance in client.account.sub_account_balances("sub-account-id"):
+    print(balance.asset, balance.available)
+
 # Places a REAL order (needs the `trade` scope). Amounts: Decimal or str, never float.
 placed = client.trading.place_order(
     "BTC/USDT", "buy", "limit", quantity=Decimal("0.001"), price="30000", time_in_force="post_only"
@@ -69,7 +73,7 @@ Both `api_key` and `api_secret` are required together; passing only one raises
 
 | Resource | Methods |
 |---|---|
-| `client.account` | `balances()`, `balance(asset)`, `ledger()`, `notifications()`, `sub_accounts()`, `api_keys()` |
+| `client.account` | `balances()`, `balance(asset)`, `ledger()`, `notifications()`, `sub_accounts()`, `sub_account_balances(id)`, `api_keys()` |
 | `client.wallet` | `deposits()`, `deposit(id)`, `withdrawals()`, `withdrawal(id)`, `withdrawal_addresses()`, `deposit_address(asset, network)` |
 | `client.trading` | `open_orders()`, `order(id)`, `order_by_client_id(id)`, `order_history()`, `trades()`, `place_order(...)`, `cancel_order(id)`, `cancel_all(symbol=...)` |
 | `client.exports` | `deposits()`, `ledger()`, `orders()`, `trades()`, `withdrawals()` (CSV bytes) |
@@ -190,7 +194,8 @@ except UnprocessableError as err:
 `Client(max_retries=3, timeout=10)` retries with exponential backoff and full jitter:
 
 - **GET** requests retry on network errors, 429, 502/503/504 and any error with
-  `retryable: true`.
+  `retryable: true`. A 4xx is never retried except 429 and 409 `CONCURRENT_MODIFICATION`, whatever
+  its body says.
 - **429** waits for the larger of the `Retry-After` header and `details.retry_after_seconds`.
   These server hints are untrusted: unparseable, negative or non-finite values are ignored, and a
   requested wait **above 120 s is never waited**: the call raises `RateLimitError` at once (its

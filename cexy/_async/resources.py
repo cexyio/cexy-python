@@ -238,6 +238,23 @@ class AsyncAccount(_Resource):
         payload = await self._t.request("list_sub_accounts")
         return [m.SubAccountResponse.model_validate(x) for x in _data(payload)]
 
+    @operation("sub_account_balances")
+    async def sub_account_balances(self, id: str) -> List[m.BalanceResponse]:
+        """A sub-account's balances, read by its PARENT account.
+
+        Same shape as :meth:`balances` (zero balances omitted), including ``held_incoming``,
+        whose sum is already inside ``locked``. The server currently returns them ordered by
+        asset symbol; don't rely on the order. An id that is not one of the caller's
+        sub-accounts (or a call with the sub-account's own key) raises
+        :class:`~cexy.NotFoundError` and is not retried; a sub-account's own key reads its
+        balances with :meth:`balances`. A malformed id gets 400 (:class:`~cexy.ValidationError`);
+        a key without the read scope gets 403 ``FORBIDDEN`` (:class:`~cexy.ForbiddenError`).
+        ``id`` must be non-empty and not ``"."`` or ``".."`` (``ValueError`` before any
+        request); it is sent as one URL path segment.
+        """
+        payload = await self._t.request("sub_account_balances", path={"id": id})
+        return [m.BalanceResponse.model_validate(x) for x in _data(payload)]
+
     @operation("list_api_keys")
     async def api_keys(self) -> List[m.ApiKeyResponse]:
         """Your API keys (metadata only; secrets are never returned)."""

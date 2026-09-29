@@ -3,12 +3,29 @@
 All notable changes to this project are documented here. The SDK stays at 0.x until API
 request signing (HMAC) ships; see "Versioning" in README.md.
 
-## Unreleased
+## 0.1.0.dev7 (2026-09-29)
 
 ### Added
+- `account.sub_account_balances(id)` (sync and async): a sub-account's balances, read by its parent
+  account (`GET /account/sub-accounts/{id}/balances`, read scope). Same shape as `balances()`,
+  including `held_incoming`. An id that is not the caller's sub-account raises `NotFoundError`
+  (not retried); an empty id raises `ValueError` before any request.
 - `BalanceResponse.held_incoming` (`HeldIncomingResponse`: `transfer_id`, `amount`, `available_at`):
   incoming internal transfers still held, at most 100, soonest first. Their sum is already included
   in `locked`: never add it again. A server that omits the field decodes as `[]`.
+
+### Changed
+- A 4xx response is never retried except 429 and 409 `CONCURRENT_MODIFICATION`, even when its body
+  says `retryable: true` (this includes 408). Those two are still retried only where they were before:
+  a 429 always, a 409 `CONCURRENT_MODIFICATION` when the server marks it retryable. A mutation is retried only when it is repeat-safe: pool join/exit with their
+  `Idempotency-Key`, `place_order` (through its `client_order_id`), `cancel_order` and `cancel_all`;
+  any other mutation is sent once.
+
+### Security
+- Path values `"."` and `".."` are rejected with `ValueError`: previously they escaped their URL
+  segment, so e.g. `sub_account_balances("..")` returned the parent's own balances and
+  `order_by_client_id("..")` the open-orders list. A write request could only be redirected to a
+  route that does not exist and is refused by the server; no write could reach a different operation.
 
 ## 0.1.0.dev6 (2026-09-28)
 
