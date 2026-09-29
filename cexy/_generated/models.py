@@ -21,41 +21,6 @@ class ApiScope(OpenEnum):
     TRADE = "trade"
 
 
-class BalanceResponse(BaseModel):
-    """
-    A balance in one asset.
-    """
-
-    model_config = ConfigDict(
-        extra="allow",
-    )
-    asset: Annotated[str, Field(description="Asset symbol.")]
-    available: Annotated[
-        Decimal,
-        Field(
-            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
-        ),
-    ]
-    locked: Annotated[
-        Decimal,
-        Field(
-            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
-        ),
-    ]
-    pending: Annotated[
-        Decimal,
-        Field(
-            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
-        ),
-    ]
-    total: Annotated[
-        Decimal,
-        Field(
-            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
-        ),
-    ]
-
-
 class CancelAllRequest(BaseModel):
     """
     Cancels every open order, optionally within one market.
@@ -317,6 +282,27 @@ class FeeScheduleResponse(BaseModel):
     ]
     taker_fee_percent: Annotated[Decimal, Field(description="Taker rate, as a percentage.", examples=["0.2"])]
     tier: Annotated[int, Field(description="Tier index.", ge=0)]
+
+
+class HeldIncomingResponse(BaseModel):
+    """
+    An internal transfer credited to `locked` and not yet available.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    amount: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    available_at: Annotated[
+        AwareDatetime,
+        Field(description="When it becomes available, unless an operator cancels it before then."),
+    ]
+    transfer_id: Annotated[str, Field(description="The transfer.")]
 
 
 class JoinPoolRequest(BaseModel):
@@ -1139,6 +1125,48 @@ class AssetResponse(BaseModel):
         ),
     ]
     website_url: Annotated[Optional[str], Field(description="Project website.")] = None
+
+
+class BalanceResponse(BaseModel):
+    """
+    A balance in one asset.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    asset: Annotated[str, Field(description="Asset symbol.")]
+    available: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    held_incoming: Annotated[
+        List[HeldIncomingResponse],
+        Field(
+            description="Internal transfers to this account still held, soonest released first; empty when none. Their sum is part of `locked`. Shows at most 100.",
+            validate_default=True,
+        ),
+    ] = []
+    locked: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    pending: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    total: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
 
 
 class CancelAllResponse(BaseModel):

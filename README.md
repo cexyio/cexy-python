@@ -121,6 +121,15 @@ The API sends every amount as a decimal string. The SDK parses them into
 `decimal.Decimal`, and sends amounts as strings. Passing a `float` raises `TypeError`
 before anything is sent, because a float cannot represent most decimal amounts exactly.
 
+## Held incoming transfers
+
+Every balance has `held_incoming`: incoming internal transfers still held, each with
+`transfer_id`, `amount` (Decimal) and `available_at`. Their sum is **already included in
+`locked`**, so never add it to `locked` or `total` again. There are at most 100 entries, soonest
+`available_at` first (millisecond precision), with no sender identity. An entry disappears once
+the transfer is released (the amount moves to `available`) or cancelled by the exchange. It is
+always a list (`[]` when none, including from servers that predate the field).
+
 ## Ledger references
 
 `LedgerEntryResponse.reference` says what caused an entry. It is a union told apart by `type`:

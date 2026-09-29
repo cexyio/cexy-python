@@ -3,6 +3,13 @@
 All notable changes to this project are documented here. The SDK stays at 0.x until API
 request signing (HMAC) ships; see "Versioning" in README.md.
 
+## Unreleased
+
+### Added
+- `BalanceResponse.held_incoming` (`HeldIncomingResponse`: `transfer_id`, `amount`, `available_at`):
+  incoming internal transfers still held, at most 100, soonest first. Their sum is already included
+  in `locked`: never add it again. A server that omits the field decodes as `[]`.
+
 ## 0.1.0.dev6 (2026-09-28)
 
 Synced with the API's H-1 release.
