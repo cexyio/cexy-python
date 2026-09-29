@@ -50,6 +50,12 @@ def preprocess(spec: dict) -> dict:
             for key in ("pattern", "minLength", "maxLength"):
                 schema.pop(key, None)
             ID_ALIASES.append(name)
+    # held_incoming is required in the spec, but servers that predate it omit it: decode those
+    # balances with an empty list instead of failing (CexyQA, 2026-09-29).
+    balance = schemas.get("BalanceResponse", {})
+    if "held_incoming" in balance.get("properties", {}):
+        balance["required"] = [r for r in balance.get("required", []) if r != "held_incoming"]
+        balance["properties"]["held_incoming"]["default"] = []
     hoist_ledger_reference(schemas)
     return spec
 
@@ -198,6 +204,8 @@ def generate_models(spec: dict) -> None:
         )
     if LEDGER_VARIANTS:
         text = postprocess_ledger_reference(text)
+    # The default above makes datamodel-codegen emit Optional[...]; the value is never None.
+    text = text.replace("Optional[List[HeldIncomingResponse]]", "List[HeldIncomingResponse]")
     (OUT / "models.py").write_text(HEADER + text)
 
 

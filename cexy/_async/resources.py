@@ -180,11 +180,21 @@ class AsyncAccount(_Resource):
 
     @operation("list_balances")
     async def balances(self) -> List[m.BalanceResponse]:
+        """Balances per asset.
+
+        ``held_incoming`` lists incoming internal transfers still held (``transfer_id``,
+        ``amount``, ``available_at``). Their sum is ALREADY INCLUDED in ``locked``: never add it
+        to ``locked`` or ``total`` again. At most 100 entries, soonest ``available_at`` first
+        (millisecond precision), no sender identity. An entry disappears once the transfer is
+        released (the amount moves to ``available``) or cancelled by the exchange. Always a list
+        (``[]`` when none, also from servers that predate the field).
+        """
         payload = await self._t.request("list_balances")
         return [m.BalanceResponse.model_validate(x) for x in _data(payload)]
 
     @operation("get_balance")
     async def balance(self, asset: str) -> m.BalanceResponse:
+        """One asset's balance. ``held_incoming`` is described on :meth:`balances`."""
         payload = await self._t.request("get_balance", path={"asset": asset})
         return m.BalanceResponse.model_validate(_data(payload))
 

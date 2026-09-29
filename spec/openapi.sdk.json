@@ -2896,7 +2896,8 @@
           "available",
           "locked",
           "pending",
-          "total"
+          "total",
+          "held_incoming"
         ],
         "properties": {
           "asset": {
@@ -2905,6 +2906,13 @@
           },
           "available": {
             "$ref": "#/components/schemas/Amount"
+          },
+          "held_incoming": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeldIncomingResponse"
+            },
+            "description": "Internal transfers to this account still held, soonest released first; empty when none. Their sum is part of `locked`. Shows at most 100."
           },
           "locked": {
             "$ref": "#/components/schemas/Amount"
@@ -3565,6 +3573,29 @@
         "maxLength": 24,
         "minLength": 24,
         "pattern": "^[0-9a-fA-F]{24}$"
+      },
+      "HeldIncomingResponse": {
+        "type": "object",
+        "description": "An internal transfer credited to `locked` and not yet available.",
+        "required": [
+          "transfer_id",
+          "amount",
+          "available_at"
+        ],
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "available_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it becomes available, unless an operator cancels it before then."
+          },
+          "transfer_id": {
+            "type": "string",
+            "description": "The transfer."
+          }
+        }
       },
       "JoinPoolRequest": {
         "type": "object",
