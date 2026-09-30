@@ -3,6 +3,12 @@
 All notable changes to this project are documented here. The SDK stays at 0.x until API
 request signing (HMAC) ships; see "Versioning" in README.md.
 
+## Unreleased
+
+### Fixed
+- `LiveBalances`: events that arrived while the owner lookup was in flight are dropped when the
+  lookup ends in `ACCOUNT_MISMATCH` (they were kept until the next snapshot).
+
 ## 0.1.0.dev9 (2026-09-30)
 
 ### Added

@@ -668,3 +668,31 @@ async def test_signed_out_auth_lost_payload_and_unknown_reason(server: FakeServe
         await ws.ping()
         await ws.ping()
         assert changes[-1].data["reason"] == "signed_out" and changes[-1].data["code"] == "unknown"
+
+
+async def test_live_balances_owner_lookup_events_dropped_on_mismatch(server: FakeServer) -> None:
+    answer: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+
+    async def owner_id() -> str:
+        return await answer
+
+    async def snapshot() -> List[Any]:
+        return []
+
+    async with make(server) as ws:
+        await ws.auth("session-token")
+        lb = await ws.live_balances(snapshot=snapshot, owner_id=owner_id)
+        for i in range(5):
+            data = {"asset": "USDT", "available": "1", "locked": "0", "pending": "0", "total": "1", "sequence": i + 1}
+            await server.push({"type": "balance.updated", "channel": "balances", "data": data})
+        await ws.ping()
+        await ws.ping()
+        assert len(lb._buffer) == 5  # held while the owner lookup is in flight
+        answer.set_result("someone_else")
+        for _ in range(100):
+            if lb.last_error is not None:
+                break
+            await asyncio.sleep(0.01)
+        assert getattr(lb.last_error, "code", None) == "ACCOUNT_MISMATCH"
+        assert len(lb._buffer) == 0
+        lb.close()
