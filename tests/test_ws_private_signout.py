@@ -121,6 +121,8 @@ async def test_private_signout(case: Dict[str, Any]) -> None:
                 elif "expect_token" in step:
                     await settle()
                     assert ws.has_token is step["expect_token"]
+                else:
+                    raise AssertionError(f"unknown step {step}")
         finally:
             for t in calls:
                 if not t.done():

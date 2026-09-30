@@ -337,7 +337,7 @@ async with cexy.AsyncClient(api_key=KEY, api_secret=SECRET) as rest:
 events (only when their `sequence` is greater than the one it holds; a total of 0 removes the row).
 It refetches by itself on a missed event, `balances.resync`, `CONCURRENT_MODIFICATION`, a reconnect
 or an account change, at most every `min_snapshot_interval` seconds (default 2), and never because a
-balance's own sequence skipped values. Before every merge it checks that the REST key's account
+balance's own sequence skipped values. At the start and after every account change it checks that the REST key's account
 (`account.id()`) is the WebSocket's authenticated user: otherwise nothing is merged and
 `last_error.code` is `ACCOUNT_MISMATCH`. `stale` is true while a refetch is pending.
 

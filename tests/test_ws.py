@@ -592,3 +592,79 @@ async def test_live_balances_default_owner_mismatch_never_merges(server: FakeSer
         assert calls == ["id"]
         assert lb.all() == [] and lb.stale
         lb.close()
+
+
+async def test_live_balances_custom_snapshot_needs_an_owner(server: FakeServer) -> None:
+    class Account:
+        async def id(self) -> str:
+            raise AssertionError("must not be used for a custom snapshot source")
+
+    class Rest:
+        account = Account()
+
+        async def aclose(self) -> None:
+            pass
+
+    async def snapshot() -> List[Any]:
+        return []
+
+    async with make(server) as ws:
+        ws._rest = Rest()  # type: ignore[assignment]
+        await ws.auth("session-token")
+        with pytest.raises(cws.WebSocketError) as exc:
+            await ws.live_balances(snapshot=snapshot)
+        assert exc.value.code == "CONFIG"
+
+
+async def test_live_balances_drops_events_while_unverified(server: FakeServer) -> None:
+    owner = {"id": "someone_else"}
+
+    async def owner_id() -> str:
+        return owner["id"]
+
+    async def snapshot() -> List[Any]:
+        row = {"asset": "USDT", "available": "5", "locked": "0", "pending": "0", "total": "5", "sequence": 10}
+        return [BalanceResponse.model_validate(row)]
+
+    async with make(server) as ws:
+        await ws.auth("session-token")
+        lb = await ws.live_balances(snapshot=snapshot, owner_id=owner_id, min_snapshot_interval=0)
+        for _ in range(100):
+            if lb.last_error is not None:
+                break
+            await asyncio.sleep(0.01)
+        assert getattr(lb.last_error, "code", None) == "ACCOUNT_MISMATCH"
+        for i in range(500):
+            data = {"asset": "USDT", "available": "9", "locked": "0", "pending": "0", "total": "9", "sequence": 50 + i}
+            await server.push({"type": "balance.updated", "channel": "balances", "data": data})
+        await ws.ping()
+        assert len(lb._buffer) == 0
+        owner["id"] = "u_1"
+        await server.push({"type": "balances.resync", "channel": "balances", "data": {}})
+        for _ in range(100):
+            if not lb.stale:
+                break
+            await asyncio.sleep(0.01)
+        row = lb.get("USDT")
+        assert row is not None and row.total == cws.Decimal("5") and row.sequence == 10
+        lb.close()
+
+
+async def test_signed_out_auth_lost_payload_and_unknown_reason(server: FakeServer) -> None:
+    lost: List[cws.Event] = []
+    changes: List[cws.Event] = []
+    async with make(server) as ws:
+        ws.on(cws.AUTH_LOST, lost.append)
+        ws.on(cws.AUTH_CHANGED, changes.append)
+        await ws.auth("session-token")
+        await server.push({"type": "signed_out", "reason": "revoked"})
+        await ws.ping()
+        await ws.ping()
+        assert [(e.channel, e.data) for e in lost] == [
+            ("account", {"session_id": None, "reason": "signed_out", "current": True})
+        ]
+        await ws.auth("session-token-2")
+        await server.push({"type": "signed_out"})
+        await ws.ping()
+        await ws.ping()
+        assert changes[-1].data["reason"] == "signed_out" and changes[-1].data["code"] == "unknown"

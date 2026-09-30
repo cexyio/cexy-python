@@ -665,10 +665,12 @@ class WebSocketClient:
         Subscribes ``balances``, takes a REST snapshot, applies newer ``balance.updated`` events and
         refetches by itself when events may be missing (a frame gap, ``balances.resync``,
         ``CONCURRENT_MODIFICATION``, a reconnect, an account change). Snapshots come from
-        ``rest.account.balances()`` or ``snapshot``. Before every merge the snapshot source's owner
-        (``rest.account.id()``, ``owner_id`` or ``account_id``) must equal the WebSocket's
-        authenticated user; otherwise nothing is merged (``ACCOUNT_MISMATCH``).
+        ``rest.account.balances()`` or ``snapshot``. The snapshot source's owner
+        (``rest.account.id()``, or ``owner_id`` / ``account_id``, required with a custom ``snapshot``)
+        must equal the WebSocket's authenticated user; otherwise nothing is merged
+        (``ACCOUNT_MISMATCH``). It is checked at the start and again after every account change.
         """
+        custom_snapshot = snapshot is not None
         if snapshot is None:
             if self._rest is None:
                 raise WebSocketError("CONFIG", "live_balances() needs snapshot= or rest=")
@@ -682,7 +684,9 @@ class WebSocketClient:
                     return fixed
 
                 owner_id = _fixed
-            elif self._rest is not None and hasattr(self._rest.account, "id"):
+            elif not custom_snapshot and self._rest is not None and hasattr(self._rest.account, "id"):
+                # The REST key's account owns only the REST key's own snapshots: a custom snapshot
+                # source must name its owner.
                 owner_id = self._rest.account.id
             else:
                 raise WebSocketError(
@@ -781,7 +785,7 @@ class WebSocketClient:
             # expired, session revoked, or a future reason). Private subscriptions are gone; a fresh
             # auth on this socket restores them.
             raw_reason = frame.get("reason")
-            reason = raw_reason if isinstance(raw_reason, str) else ""
+            reason = raw_reason if isinstance(raw_reason, str) and raw_reason else "unknown"
             self._token = None
             if reason == "revoked":
                 self._signed_out("session_revoked")
@@ -988,8 +992,8 @@ class LiveBalances:
     An event applies only if its ``data.sequence`` is greater than the stored one for that asset;
     a total of 0 removes the row (a snapshot row at or below that sequence cannot bring it back).
     A new snapshot is taken on a frame gap, ``balances.resync``, ``CONCURRENT_MODIFICATION``, a
-    reconnect and after an account change, never because ``data.sequence`` skipped values. Before
-    every merge the snapshot source's owner is checked against the WebSocket user.
+    reconnect and after an account change, never because ``data.sequence`` skipped values. At
+    the start and after every account change the snapshot source's owner is checked against the WebSocket user.
     """
 
     def __init__(
@@ -1063,8 +1067,13 @@ class LiveBalances:
     def _on_event(self, data: Dict[str, Any]) -> None:
         if self._closed or not isinstance(data.get("asset"), str):
             return
-        if self._fetching or self._verified_user is None:
+        # Buffered only while a snapshot is in flight (it is applied on top). Without a verified owner
+        # and no fetch (mismatch, retry backoff, signed out), events are dropped: the next snapshot
+        # is complete anyway.
+        if self._fetching:
             self._buffer.append(data)
+            return
+        if self._verified_user is None:
             return
         self._apply(data, emit=True)
 
