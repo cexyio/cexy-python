@@ -1,0 +1,310 @@
+{
+  "description": "Frame-sequence gap detection on private channels in the plain WebSocket client (no helper), with the client option reorder_window_ms from the case. Same step kinds as private_signout.json plus {\"advance_ms\": n}: advance the client's test clock by n ms and run every timer that falls due (the reorder window); SDKs inject this clock for tests, so no case depends on real time. Tracked events: sequence_gap {channel, expected, received} and resync {reason: \"sequence_gap\"} (both once per gap). The first frame after subscribed is the baseline; a number lower than expected is late or duplicate (never a gap); a higher number is a gap only if the missing numbers have not all arrived within reorder_window_ms; after a gap the next expected number is received + 1. Frames without a sequence are ignored.",
+  "cases": [
+    {
+      "id": "swap_filled_in_window",
+      "options": {
+        "reorder_window_ms": 50
+      },
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "subscribe",
+          "channels": [
+            "orders"
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "orders"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "server": {
+            "type": "order.updated",
+            "channel": "orders",
+            "sequence": 5,
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "id": "o5"
+            }
+          }
+        },
+        {
+          "server": {
+            "type": "order.updated",
+            "channel": "orders",
+            "sequence": 6,
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "id": "o6"
+            }
+          }
+        },
+        {
+          "server": {
+            "type": "order.updated",
+            "channel": "orders",
+            "sequence": 8,
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "id": "o8"
+            }
+          }
+        },
+        {
+          "server": {
+            "type": "order.updated",
+            "channel": "orders",
+            "sequence": 7,
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "id": "o7"
+            }
+          }
+        },
+        {
+          "server": {
+            "type": "order.updated",
+            "channel": "orders",
+            "sequence": 9,
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "id": "o9"
+            }
+          }
+        },
+        {
+          "advance_ms": 150
+        },
+        {
+          "expect_events": []
+        }
+      ]
+    },
+    {
+      "id": "gap_after_window",
+      "options": {
+        "reorder_window_ms": 50
+      },
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "subscribe",
+          "channels": [
+            "orders"
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "orders"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "server": {
+            "type": "order.updated",
+            "channel": "orders",
+            "sequence": 5,
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "id": "o5"
+            }
+          }
+        },
+        {
+          "server": {
+            "type": "order.updated",
+            "channel": "orders",
+            "sequence": 6,
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "id": "o6"
+            }
+          }
+        },
+        {
+          "server": {
+            "type": "order.updated",
+            "channel": "orders",
+            "sequence": 8,
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "id": "o8"
+            }
+          }
+        },
+        {
+          "advance_ms": 150
+        },
+        {
+          "expect_events": [
+            {
+              "type": "sequence_gap",
+              "channel": "orders",
+              "expected": 7,
+              "received": 8
+            },
+            {
+              "type": "resync",
+              "reason": "sequence_gap"
+            }
+          ]
+        },
+        {
+          "server": {
+            "type": "order.updated",
+            "channel": "orders",
+            "sequence": 9,
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "id": "o9"
+            }
+          }
+        },
+        {
+          "server": {
+            "type": "order.updated",
+            "channel": "orders",
+            "sequence": 7,
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "id": "o7late"
+            }
+          }
+        },
+        {
+          "advance_ms": 150
+        },
+        {
+          "expect_events": []
+        }
+      ]
+    },
+    {
+      "id": "baseline_resets_on_resubscribe",
+      "options": {
+        "reorder_window_ms": 50
+      },
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "subscribe",
+          "channels": [
+            "orders"
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "orders"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "server": {
+            "type": "order.updated",
+            "channel": "orders",
+            "sequence": 5,
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "id": "o5"
+            }
+          }
+        },
+        {
+          "client": "auth",
+          "token": "tok_b"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "bbbb0002"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "orders"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "server": {
+            "type": "order.updated",
+            "channel": "orders",
+            "sequence": 1,
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "id": "p1"
+            }
+          }
+        },
+        {
+          "server": {
+            "type": "order.updated",
+            "channel": "orders",
+            "sequence": 2,
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "id": "p2"
+            }
+          }
+        },
+        {
+          "advance_ms": 150
+        },
+        {
+          "expect_events": [
+            {
+              "type": "resync",
+              "reason": "reauth"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

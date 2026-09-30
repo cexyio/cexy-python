@@ -54,6 +54,7 @@ from websockets.exceptions import ConnectionClosed, WebSocketException
 
 from cexy._async.client import AsyncClient
 from cexy._common import USER_AGENT, check_scheme
+from cexy._generated import models as m
 from cexy.auth import REDACTED, redact_text
 from cexy.errors import CexyError
 
@@ -73,7 +74,14 @@ AUTH_LOST = "auth_lost"
 #: ``code`` (auth_failed only) and ``dropped`` (the private channels no longer held; they are
 #: re-subscribed automatically, followed by ``resync`` with reason ``reauth``).
 AUTH_CHANGED = "auth_changed"
+# ``auth_changed`` reasons: ``user_changed``, ``auth_failed`` (``code``: the server's error code),
+# ``session_revoked``, ``token_expired`` (the ``signed_out`` frame), and ``signed_out`` for a server
+# sign-out reason this SDK does not know (``code``: the raw reason). The set may grow.
 RECONNECTED = "reconnected"
+#: A private channel skipped sequence numbers on this connection (after the reorder window): events
+#: were lost. ``channel`` is set; ``data``: ``expected``, ``received``. Followed by ``resync`` with
+#: ``{"reason": "sequence_gap", "channel": ...}``; refetch that channel's state.
+SEQUENCE_GAP = "sequence_gap"
 BOOK_STALE = "book_stale"
 RESYNC = "resync"
 KNOWN_EVENT_TYPES = frozenset(
@@ -92,9 +100,12 @@ KNOWN_EVENT_TYPES = frozenset(
         "deposit.completed",
         "withdrawal.updated",
         "session.revoked",
+        "balances.resync",
+        "deposits.resync",
+        "withdrawals.resync",
     }
 )
-SYNTHETIC_EVENT_TYPES = frozenset({AUTH_LOST, AUTH_CHANGED, RECONNECTED, BOOK_STALE, RESYNC})
+SYNTHETIC_EVENT_TYPES = frozenset({AUTH_LOST, AUTH_CHANGED, RECONNECTED, BOOK_STALE, RESYNC, SEQUENCE_GAP})
 
 _warned_versions: Set[int] = set()
 
@@ -125,6 +136,30 @@ class Event:
 class SubscribeResult:
     added: List[str]
     refused: List[str]
+
+
+class Clock:
+    """TEST-ONLY time source for the reorder-window timer and ``LiveBalances`` scheduling (minimum
+    snapshot interval, retry backoff). Socket timeouts always use the event loop. The default uses
+    the running loop's ``time()`` and ``call_later()``."""
+
+    def now(self) -> float:
+        return asyncio.get_running_loop().time()
+
+    def call_later(self, delay: float, fn: Callable[[], None]) -> Any:
+        """Returns a handle with ``cancel()``."""
+        return asyncio.get_running_loop().call_later(delay, fn)
+
+
+REAL_CLOCK = Clock()
+
+
+@dataclass
+class _SeqState:
+    next: int
+    holes: Set[int] = field(default_factory=set)
+    first: Optional[Tuple[int, int]] = None
+    timer: Any = None
 
 
 Level = Tuple[Decimal, Decimal]
@@ -280,7 +315,12 @@ class WebSocketClient:
         request_timeout: float = 10.0,
         user_agent_suffix: Optional[str] = None,
         allow_insecure: bool = False,
+        reorder_window: float = 0.25,
+        clock: Optional[Clock] = None,
     ) -> None:
+        """``reorder_window``: seconds a missing private sequence number gets to arrive (channels with
+        several publishers can swap adjacent frames) before it counts as a gap. ``clock``: TEST-ONLY
+        (see ``Clock``)."""
         # wss:// only; ws:// needs allow_insecure=True and a loopback host (local testing).
         check_scheme(url, "wss", "ws", allow_insecure)
         self.url = url
@@ -316,6 +356,11 @@ class WebSocketClient:
         self.authenticated = False
         self.user_id: Any = None
         self.connections = 0
+        self.reorder_window = reorder_window
+        self._clock = clock or REAL_CLOCK
+        self._seq: Dict[str, _SeqState] = {}
+        self._live_balances: List[Any] = []
+        self._balances_by_helper = False
 
     # -- lifecycle -----------------------------------------------------------------
 
@@ -331,6 +376,9 @@ class WebSocketClient:
 
     async def close(self) -> None:
         self._closing = True
+        self._reset_seq()
+        for lb in list(self._live_balances):
+            lb.close()
         for task in [self._ping_task, *self._bg]:
             if task is not None:
                 task.cancel()
@@ -375,6 +423,9 @@ class WebSocketClient:
         self.connections += 1
         self.authenticated = False
         self.user_id = None  # a new connection starts signed out
+        self._reset_seq()  # sequences on a new connection are unrelated
+        for lb in self._live_balances:
+            lb._on_disconnect()
         self._last_rx = asyncio.get_running_loop().time()
         self._handle_welcome(frame)
         self._ping_task = asyncio.create_task(self._ping_loop(conn))
@@ -558,6 +609,7 @@ class WebSocketClient:
         for ch in channels:
             self._channels.discard(ch)
             self._pending_private.discard(ch)
+            self._reset_seq(ch)
             if ch.startswith("orderbook:"):
                 self._books.pop(ch[len("orderbook:") :], None)
         await self._request({"op": "unsubscribe", "channels": list(channels)}, "unsubscribed")
@@ -598,6 +650,70 @@ class WebSocketClient:
             await self._snapshot(book)
 
     # -- receiving -----------------------------------------------------------------
+
+    async def live_balances(
+        self,
+        *,
+        snapshot: Optional[Callable[[], Awaitable[List[Any]]]] = None,
+        owner_id: Optional[Callable[[], Awaitable[str]]] = None,
+        account_id: Optional[str] = None,
+        min_snapshot_interval: float = 2.0,
+        retry: float = 1.0,
+    ) -> LiveBalances:
+        """Live balances of the authenticated account (call ``auth()`` first).
+
+        Subscribes ``balances``, takes a REST snapshot, applies newer ``balance.updated`` events and
+        refetches by itself when events may be missing (a frame gap, ``balances.resync``,
+        ``CONCURRENT_MODIFICATION``, a reconnect, an account change). Snapshots come from
+        ``rest.account.balances()`` or ``snapshot``. Before every merge the snapshot source's owner
+        (``rest.account.id()``, ``owner_id`` or ``account_id``) must equal the WebSocket's
+        authenticated user; otherwise nothing is merged (``ACCOUNT_MISMATCH``).
+        """
+        if snapshot is None:
+            if self._rest is None:
+                raise WebSocketError("CONFIG", "live_balances() needs snapshot= or rest=")
+            rest = self._rest
+            snapshot = rest.account.balances
+        if owner_id is None:
+            if account_id is not None:
+                fixed = account_id
+
+                async def _fixed() -> str:
+                    return fixed
+
+                owner_id = _fixed
+            elif self._rest is not None and hasattr(self._rest.account, "id"):
+                owner_id = self._rest.account.id
+            else:
+                raise WebSocketError(
+                    "CONFIG", "live_balances() needs owner_id= or account_id= to check the snapshot's account"
+                )
+        lb = LiveBalances(self, snapshot, owner_id, min_snapshot_interval, retry)
+        self._live_balances.append(lb)
+        held = "balances" in self._channels or "balances" in self._pending_private
+        if not held:
+            self._balances_by_helper = True
+        try:
+            res = await self.subscribe("balances")
+        except BaseException:
+            lb.close()
+            raise
+        if res.refused:
+            lb.close()
+            raise WebSocketError("LOCAL_SUBSCRIPTION_LIMIT", "cannot subscribe to balances: limit reached")
+        if held:
+            lb._trigger("start")  # no `subscribed` reply comes for a held channel
+        return lb
+
+    def _release_balances(self, lb: LiveBalances) -> None:
+        if lb in self._live_balances:
+            self._live_balances.remove(lb)
+        if not self._live_balances and self._balances_by_helper and not self._closing:
+            self._balances_by_helper = False
+            if self._conn is not None:
+                self._spawn(self.unsubscribe("balances"))
+            else:
+                self._channels.discard("balances")
 
     def on(self, event_type: str, handler: Handler) -> None:
         """Call ``handler(event)`` for each event of ``event_type`` (``"*"`` for all)."""
@@ -649,9 +765,32 @@ class WebSocketClient:
                     if self._token == token:
                         self._token = None  # a refused token is not re-sent on reconnect
                     self._signed_out("auth_failed", str(frame.get("code")))
+            if ftype == "subscribed":
+                acked = [c for c in frame.get("channels") or [] if isinstance(c, str)]
+                for c in acked:
+                    self._reset_seq(c)  # the next frame is the new baseline
+                if "balances" in acked:
+                    for lb in list(self._live_balances):
+                        lb._trigger("resubscribed")
             fut = self._pending[fid]
             if not fut.done():
                 fut.set_result(frame)
+            return
+        if ftype == "signed_out":
+            # signed_out (a planned server frame): the server signed this connection out (token
+            # expired, session revoked, or a future reason). Private subscriptions are gone; a fresh
+            # auth on this socket restores them.
+            raw_reason = frame.get("reason")
+            reason = raw_reason if isinstance(raw_reason, str) else ""
+            self._token = None
+            if reason == "revoked":
+                self._signed_out("session_revoked")
+                lost = {"session_id": None, "reason": "signed_out", "current": True}
+                self._spawn(self._emit(Event(type=AUTH_LOST, channel="account", data=lost, raw=frame)))
+            elif reason == "expired":
+                self._signed_out("token_expired")
+            else:
+                self._signed_out("signed_out", reason)
             return
         if ftype in ("pong", "subscribed", "unsubscribed", "authenticated"):
             return  # unsolicited pong (no id: liveness only) or a late/uncorrelated ack
@@ -669,6 +808,19 @@ class WebSocketClient:
             timestamp=frame.get("timestamp"),
             raw=frame,
         )
+        if ev.channel in PRIVATE_CHANNELS and isinstance(ev.sequence, int) and not isinstance(ev.sequence, bool):
+            self._track_seq(ev.channel, ev.sequence)
+        if ftype in ("balances.resync", "deposits.resync", "withdrawals.resync"):
+            reason = str(ftype).replace(".", "_")  # balances_resync, deposits_resync, withdrawals_resync
+            self._spawn(self._emit(ev))
+            self._spawn(self._emit(Event(type=RESYNC, channel=ev.channel, data={"reason": reason})))
+            if ftype == "balances.resync":
+                for lb in list(self._live_balances):
+                    lb._trigger("balances_resync")
+            return
+        if ftype == "balance.updated" and isinstance(ev.data, dict):
+            for lb in list(self._live_balances):
+                lb._on_event(ev.data)
         if ftype == "orderbook.update" and ev.channel and ev.channel.startswith("orderbook:"):
             book = self._books.get(ev.channel[len("orderbook:") :])
             if book is not None and book.apply_update(ev) == "stale":
@@ -680,6 +832,60 @@ class WebSocketClient:
             self._token = None  # never re-auth with a revoked session
             self._signed_out("session_revoked")
             self._spawn(self._emit(Event(type=AUTH_LOST, channel=ev.channel, data=ev.data)))
+
+    def _reset_seq(self, channel: Optional[str] = None) -> None:
+        """Forget the sequence baseline of ``channel`` (all channels when None)."""
+        states = list(self._seq.values()) if channel is None else [s for s in [self._seq.get(channel)] if s]
+        for st in states:
+            if st.timer is not None:
+                st.timer.cancel()
+        if channel is None:
+            self._seq.clear()
+        else:
+            self._seq.pop(channel, None)
+
+    def _track_seq(self, channel: str, n: int) -> None:
+        """First frame: baseline. Lower than expected: late, never a gap. Higher: holes that must
+        fill within the reorder window."""
+        st = self._seq.get(channel)
+        if st is None:
+            self._seq[channel] = _SeqState(next=n + 1)
+            return
+        if n < st.next:
+            if n in st.holes:
+                st.holes.discard(n)
+                if not st.holes and st.timer is not None:
+                    st.timer.cancel()
+                    st.timer = None
+                    st.first = None
+            return
+        if n > st.next and st.first is None:
+            st.first = (st.next, n)
+        st.holes.update(range(st.next, n))
+        st.next = n + 1
+        if st.holes and st.timer is None:
+            state = st
+
+            def fire() -> None:
+                state.timer = None
+                if not state.holes or self._seq.get(channel) is not state:
+                    return
+                expected, received = state.first or (min(state.holes), state.next - 1)
+                state.holes.clear()
+                state.first = None
+                self._spawn(
+                    self._emit(
+                        Event(type=SEQUENCE_GAP, channel=channel, data={"expected": expected, "received": received})
+                    )
+                )
+                self._spawn(
+                    self._emit(Event(type=RESYNC, channel=channel, data={"reason": "sequence_gap", "channel": channel}))
+                )
+                if channel == "balances":
+                    for lb in list(self._live_balances):
+                        lb._trigger("sequence_gap")
+
+            st.timer = self._clock.call_later(self.reorder_window, fire)
 
     def _drop_private(self) -> List[str]:
         dropped = sorted(c for c in self._channels if c in PRIVATE_CHANNELS)
@@ -694,7 +900,11 @@ class WebSocketClient:
             data["code"] = code
         self.authenticated = False
         self.user_id = None
+        for c in PRIVATE_CHANNELS:
+            self._reset_seq(c)
         data["dropped"] = self._drop_private()
+        for lb in list(self._live_balances):
+            lb._on_auth_changed(reason)
         self._spawn(self._emit(Event(type=AUTH_CHANGED, data=data)))
 
     def _on_authenticated(self, user_id: Optional[str]) -> None:
@@ -703,6 +913,10 @@ class WebSocketClient:
         self.authenticated = True
         self.user_id = user_id
         if previous is not None and user_id != previous:
+            for c in PRIVATE_CHANNELS:
+                self._reset_seq(c)
+            for lb in list(self._live_balances):
+                lb._on_auth_changed("user_changed")
             dropped = self._drop_private()
             data = {"reason": "user_changed", "previous_user_id": previous, "user_id": user_id, "dropped": dropped}
             self._spawn(self._emit(Event(type=AUTH_CHANGED, data=data)))
@@ -732,6 +946,8 @@ class WebSocketClient:
         if code == "CONCURRENT_MODIFICATION" and frame.get("id") is None:
             # Messages were dropped: every book and channel may be out of date.
             await self._emit(Event(type=RESYNC, data={"reason": code}, raw=frame))
+            for lb in list(self._live_balances):
+                lb._trigger("concurrent_modification")
             await self.resync()
 
     async def _emit(self, ev: Event) -> None:
@@ -744,6 +960,280 @@ class WebSocketClient:
                     await result
             except Exception:
                 logger.exception("cexy.ws: event handler failed")
+
+
+class AccountMismatchError(WebSocketError):
+    """The snapshot source belongs to another account than the WebSocket session."""
+
+    def __init__(self, websocket_user_id: str, snapshot_user_id: str) -> None:
+        super().__init__(
+            "ACCOUNT_MISMATCH",
+            f"the snapshot source belongs to {snapshot_user_id}, the WebSocket to {websocket_user_id}; not merging",
+        )
+        self.websocket_user_id = websocket_user_id
+        self.snapshot_user_id = snapshot_user_id
+
+
+#: ``LiveBalances`` events (``lb.on(...)``): one asset changed (``data``: the row, or None when removed).
+BALANCE_UPDATE = "update"
+#: A snapshot was applied (``data``: ``{"reason": ...}``).
+BALANCE_SNAPSHOT = "snapshot"
+#: ``ACCOUNT_MISMATCH`` (nothing merged) or a failed snapshot or owner lookup (retried with backoff).
+BALANCE_ERROR = "error"
+
+
+class LiveBalances:
+    """Live balances of the authenticated account. Created by ``WebSocketClient.live_balances()``.
+
+    An event applies only if its ``data.sequence`` is greater than the stored one for that asset;
+    a total of 0 removes the row (a snapshot row at or below that sequence cannot bring it back).
+    A new snapshot is taken on a frame gap, ``balances.resync``, ``CONCURRENT_MODIFICATION``, a
+    reconnect and after an account change, never because ``data.sequence`` skipped values. Before
+    every merge the snapshot source's owner is checked against the WebSocket user.
+    """
+
+    def __init__(
+        self,
+        ws: WebSocketClient,
+        snapshot: Callable[[], Awaitable[List[Any]]],
+        owner_id: Callable[[], Awaitable[str]],
+        min_snapshot_interval: float,
+        retry: float,
+    ) -> None:
+        self._ws = ws
+        self._clock = ws._clock
+        self._snapshot = snapshot
+        self._owner_id = owner_id
+        self._min_interval = min_snapshot_interval
+        self._retry = retry
+        #: True until the first snapshot, and from every refetch trigger until the next one is applied.
+        self.stale = True
+        #: The last error (also emitted as ``error``; the first owner check can fail before a handler
+        #: is attached). ``AccountMismatchError`` (code ``ACCOUNT_MISMATCH``): nothing was merged.
+        #: Cleared by the next snapshot.
+        self.last_error: Optional[Exception] = None
+        self._rows: Dict[str, Any] = {}
+        self._tombstones: Dict[str, int] = {}
+        self._buffer: List[Dict[str, Any]] = []
+        self._verified_user: Optional[str] = None
+        self._fetching = False
+        self._again: Optional[str] = None
+        self._last_success: Optional[float] = None
+        self._timer: Any = None
+        self._attempt = 0
+        self._closed = False
+        self._generation = 0
+        self._warned_no_sequence = False
+        self._handlers: Dict[str, List[Handler]] = collections.defaultdict(list)
+
+    def on(self, event_type: str, handler: Handler) -> None:
+        """``update``, ``snapshot`` or ``error``."""
+        self._handlers[event_type].append(handler)
+
+    def get(self, asset: str) -> Any:
+        """A copy of one asset's balance, or None."""
+        row = self._rows.get(asset)
+        return row.model_copy() if row is not None else None
+
+    def all(self) -> List[Any]:
+        """Copies of every non-zero balance."""
+        return [r.model_copy() for r in self._rows.values()]
+
+    def close(self) -> None:
+        """Stop following (unsubscribes ``balances`` unless something else on this socket needs it)."""
+        if self._closed:
+            return
+        self._closed = True
+        self._cancel_timer()
+        self._ws._release_balances(self)
+
+    # -- hooks called by the client ------------------------------------------------
+
+    def _on_disconnect(self) -> None:
+        self._mark_stale()
+
+    def _on_auth_changed(self, reason: str) -> None:
+        self._verified_user = None
+        self._mark_stale()
+        if reason == "user_changed":
+            # Another account's balances must never show: forget everything until the owner check.
+            self._rows.clear()
+            self._tombstones.clear()
+
+    def _on_event(self, data: Dict[str, Any]) -> None:
+        if self._closed or not isinstance(data.get("asset"), str):
+            return
+        if self._fetching or self._verified_user is None:
+            self._buffer.append(data)
+            return
+        self._apply(data, emit=True)
+
+    def _trigger(self, reason: str) -> None:
+        if self._closed:
+            return
+        self.stale = True
+        if self._fetching:
+            if self._again is None:
+                self._again = reason
+            return
+        if self._timer is not None:
+            return
+        wait = 0.0 if self._last_success is None else self._last_success + self._min_interval - self._clock.now()
+        if wait > 0:
+
+            def later() -> None:
+                self._timer = None
+                self._ws._spawn(self._fetch(reason))
+
+            self._timer = self._clock.call_later(wait, later)
+            return
+        self._fetching = True  # claimed now, so triggers until the task runs coalesce
+        self._ws._spawn(self._fetch(reason, claimed=True))
+
+    # -- internals -----------------------------------------------------------------
+
+    def _mark_stale(self) -> None:
+        self.stale = True
+        self._generation += 1
+        self._buffer = []
+
+    def _cancel_timer(self) -> None:
+        if self._timer is not None:
+            self._timer.cancel()
+        self._timer = None
+
+    async def _fetch(self, reason: str, claimed: bool = False) -> None:
+        if self._closed:
+            self._fetching = False
+            return
+        if not claimed and self._fetching:
+            if self._again is None:
+                self._again = reason
+            return
+        ws_user = self._ws.user_id if self._ws.authenticated else None
+        if ws_user is None:
+            self._fetching = False  # signed out: the re-subscribe after the next auth triggers again
+            return
+        self._fetching = True
+        self._buffer = []
+        self._generation += 1
+        gen = self._generation
+        try:
+            if self._verified_user != ws_user:
+                owner = await self._owner_id()
+                if self._closed or gen != self._generation:
+                    return self._done()
+                if owner != ws_user:
+                    self._rows.clear()
+                    self._tombstones.clear()
+                    self._fetching = False
+                    self._again = None
+                    self.last_error = AccountMismatchError(ws_user, owner)
+                    await self._emit(BALANCE_ERROR, self.last_error)
+                    return
+                self._verified_user = ws_user
+            rows = await self._snapshot()
+            if self._closed or gen != self._generation:
+                return self._done()
+            self._apply_snapshot(rows)
+            self._attempt = 0
+            self._last_success = self._clock.now()
+            self.stale = False
+            self.last_error = None
+            self._fetching = False
+            await self._emit(BALANCE_SNAPSHOT, {"reason": reason})
+            again, self._again = self._again, None
+            if again is not None:
+                self._trigger(again)
+        except Exception as exc:  # reported, then retried
+            self._fetching = False
+            if self._closed:
+                return
+            self.last_error = exc
+            await self._emit(BALANCE_ERROR, exc)
+            delay = min(30.0, self._retry * 2**self._attempt)
+            self._attempt += 1
+            self._cancel_timer()
+
+            def retry() -> None:
+                self._timer = None
+                self._trigger("retry")
+
+            self._timer = self._clock.call_later(delay, retry)
+
+    def _done(self) -> None:
+        self._fetching = False
+        again, self._again = self._again, None
+        if again is not None and not self._closed:
+            self._trigger(again)
+
+    def _apply_snapshot(self, rows: List[Any]) -> None:
+        fresh: Dict[str, Any] = {}
+        for r in rows:
+            tomb = self._tombstones.get(r.asset)
+            if tomb is not None:
+                if r.sequence <= tomb:
+                    continue
+                del self._tombstones[r.asset]
+            if Decimal(r.total) == 0:
+                continue
+            fresh[r.asset] = r
+        self._rows = fresh
+        buffered, self._buffer = self._buffer, []
+        for d in buffered:
+            self._apply(d, emit=False)
+
+    def _apply(self, d: Dict[str, Any], emit: bool) -> None:
+        asset = d["asset"]
+        prev = self._rows.get(asset)
+        current: int = (prev.sequence or 0) if prev is not None else self._tombstones.get(asset, -1)
+        # A server that predates live balances sends no data.sequence: such an event always applies
+        # and keeps the stored sequence (a later sequenced snapshot or event takes over).
+        raw_seq: Any = d.get("sequence")
+        sequenced = isinstance(raw_seq, int) and not isinstance(raw_seq, bool)
+        if not sequenced and not self._warned_no_sequence:
+            self._warned_no_sequence = True
+            logger.warning("cexy.ws: balance.updated without data.sequence; applying every event in arrival order")
+        seq: int = raw_seq if sequenced else max(current, 0)
+        if sequenced and seq <= current:
+            return  # duplicate or older
+        if Decimal(str(d.get("total", "0"))) == 0:
+            self._rows.pop(asset, None)
+            if sequenced:
+                self._tombstones[asset] = seq
+            if emit:
+                self._ws._spawn(self._emit(BALANCE_UPDATE, {"asset": asset, "balance": None}))
+            return
+        amounts: Dict[str, Decimal] = {
+            k: Decimal(str(d[k])) for k in ("available", "locked", "pending", "total") if k in d
+        }
+        if prev is not None:
+            update: Dict[str, Any] = {**amounts, "sequence": seq}
+            row = prev.model_copy(update=update)
+        else:
+            row = m.BalanceResponse(
+                asset=asset,
+                held_incoming=[],
+                available=amounts.get("available", Decimal(0)),
+                locked=amounts.get("locked", Decimal(0)),
+                pending=amounts.get("pending", Decimal(0)),
+                total=amounts.get("total", Decimal(0)),
+                sequence=seq,
+            )
+        self._rows[asset] = row
+        self._tombstones.pop(asset, None)
+        if emit:
+            self._ws._spawn(self._emit(BALANCE_UPDATE, {"asset": asset, "balance": row.model_copy()}))
+
+    async def _emit(self, event_type: str, data: Any) -> None:
+        ev = Event(type=event_type, channel="balances", data=data)
+        for handler in list(self._handlers.get(event_type, [])):
+            try:
+                result = handler(ev)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                logger.exception("cexy.ws: live balances handler failed")
 
 
 def _log_task_error(task: asyncio.Task[Any]) -> None:

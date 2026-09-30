@@ -16,6 +16,7 @@ from cexy.ws import WebSocketClient
 from tests.conftest import load
 
 SPEC = load("ws/private_signout.json")
+SERVER = load("ws/server_signout.json")
 WELCOME = load("ws/welcome.json")
 
 
@@ -55,7 +56,9 @@ def _norm_sent(m: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-@pytest.mark.parametrize("case", SPEC["cases"], ids=[c["id"] for c in SPEC["cases"]])
+@pytest.mark.parametrize(
+    "case", SPEC["cases"] + SERVER["cases"], ids=[c["id"] for c in SPEC["cases"] + SERVER["cases"]]
+)
 async def test_private_signout(case: Dict[str, Any]) -> None:
     srv = ScriptedServer()
     async with serve(srv.handler, "127.0.0.1", 0) as server:

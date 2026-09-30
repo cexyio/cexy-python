@@ -8,7 +8,7 @@ Typed Python client for the [CEXY.io](https://cexy.io) exchange REST and WebSock
 - Client-side rate limiting, cursor pagination
 - WebSocket client with heartbeat, reconnect and a self-syncing order book
 
-> Status: **0.1.0.dev8, pre-release.** The API may change before 1.0 (see [Versioning](#versioning)).
+> Status: **0.1.0.dev9, pre-release.** The API may change before 1.0 (see [Versioning](#versioning)).
 > Pre-releases need `--pre`: `pip install --pre cexy`.
 
 ## Install
@@ -309,6 +309,37 @@ session is revoked (`session.revoked` with `current: true`). The client emits `a
 channels) and re-subscribes those channels itself: at once for another user, after the next
 successful `auth()` otherwise, followed by `resync` with `{"reason": "reauth"}` (refetch private
 state).
+
+The server can also sign a connection out by itself: `signed_out` (a planned server frame; this
+SDK already handles it). Reason `expired` becomes `auth_changed` `token_expired`, reason `revoked`
+becomes `session_revoked` plus `auth_lost`, and any other reason becomes `signed_out` with the raw
+value in `code`. Re-send `auth()` with the fresh token on every token refresh; that keeps the
+private subscriptions.
+
+**Missed private events.** Every private frame carries a per-connection `sequence`. When numbers
+are skipped (after a short reorder window, `reorder_window=0.25` seconds by default), the client
+emits `sequence_gap` and `resync` with `{"reason": "sequence_gap", "channel": ...}`: refetch that
+channel's state over REST. `balances.resync`, `deposits.resync` and `withdrawals.resync` (the last
+two planned) emit `resync` with `balances_resync`, `deposits_resync` or `withdrawals_resync`.
+
+### Live balances
+
+```python
+async with cexy.AsyncClient(api_key=KEY, api_secret=SECRET) as rest:
+    async with WebSocketClient(rest=rest) as ws:
+        await ws.auth(session_token)
+        balances = await ws.live_balances()
+        balances.on("update", lambda e: print(e.data["asset"], e.data["balance"]))
+        print(balances.get("USDT"), balances.stale, balances.last_error)
+```
+
+`live_balances()` subscribes `balances`, takes a REST snapshot and applies newer `balance.updated`
+events (only when their `sequence` is greater than the one it holds; a total of 0 removes the row).
+It refetches by itself on a missed event, `balances.resync`, `CONCURRENT_MODIFICATION`, a reconnect
+or an account change, at most every `min_snapshot_interval` seconds (default 2), and never because a
+balance's own sequence skipped values. Before every merge it checks that the REST key's account
+(`account.id()`) is the WebSocket's authenticated user: otherwise nothing is merged and
+`last_error.code` is `ACCOUNT_MISMATCH`. `stale` is true while a refetch is pending.
 
 ## Security notes
 

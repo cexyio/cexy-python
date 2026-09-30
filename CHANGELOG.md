@@ -3,6 +3,32 @@
 All notable changes to this project are documented here. The SDK stays at 0.x until API
 request signing (HMAC) ships; see "Versioning" in README.md.
 
+## 0.1.0.dev9 (2026-09-30)
+
+### Added
+- `account.id()` (sync and async): the account id of the API key (`GET /api/v1/account/id`, read
+  scope).
+- `WebSocketClient.live_balances()` / `LiveBalances`: live balances from a REST snapshot plus
+  `balance.updated` events. An event applies only when its `sequence` is greater than the stored one
+  (a total of 0 removes the row, and an older snapshot row cannot bring it back); a refetch happens
+  on a missed event, `balances.resync`, `CONCURRENT_MODIFICATION`, a reconnect or an account
+  change, at most every `min_snapshot_interval` seconds (default 2), with retry backoff. Before every
+  merge the REST key's account (`account.id()`) must be the WebSocket's user, otherwise nothing is
+  merged (`AccountMismatchError`, `ACCOUNT_MISMATCH`). Events without `sequence` (older servers)
+  always apply and log one warning. `stale`, `last_error`, `get()`, `all()`, `close()`, `on()` with
+  `update`, `snapshot`, `error`.
+- WebSocket: frame-sequence tracking on private channels. A gap that is not filled within
+  `reorder_window` seconds (default 0.25; channels with several publishers can swap adjacent frames)
+  emits `sequence_gap` and `resync` `{"reason": "sequence_gap", "channel": ...}`.
+- WebSocket: `balances.resync` (and the planned `deposits.resync` / `withdrawals.resync`) are known
+  events and emit `resync` with `balances_resync`, `deposits_resync` or `withdrawals_resync`.
+- WebSocket: the planned `signed_out` server frame is handled as a server sign-out: `expired` gives
+  `auth_changed` `token_expired`, `revoked` gives `session_revoked` plus `auth_lost` (data
+  `{"session_id": None, "reason": "signed_out", "current": True}`), any other reason gives
+  `signed_out` with the raw reason in `code`. The token is forgotten.
+- `BalanceResponse.sequence` (a missing value decodes as 0), `Clock` / `clock=` (test-only time
+  source), `REAL_CLOCK`.
+
 ## 0.1.0.dev8 (2026-09-30)
 
 ### Fixed

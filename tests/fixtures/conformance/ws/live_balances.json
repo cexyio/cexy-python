@@ -1,0 +1,1952 @@
+{
+  "description": "LiveBalances helper (TS ws.liveBalances(), Python ws.live_balances(), Go ws.LiveBalances, Rust ws.live_balances) against a scripted server, same step kinds as private_signout.json plus: {\"client\": \"live_balances\"} starts the helper with the case's options (reorder_window_ms, min_snapshot_interval_ms) and with two injected sources that the script answers: {\"owner\": ID} waits (up to 2 s) until the helper has an unanswered owner-id request and resolves it (the REST account id, GET /api/v1/account/id), {\"snapshot\": [rows]} does the same for its balances snapshot request (GET /api/v1/account/balances rows). {\"expect_requests\": {\"owner\": n, \"snapshot\": n}} counts the requests the helper has made so far (checked after the client has processed everything sent before); {\"expect_state\": {asset: {total, sequence}}} compares the helper's rows exactly (the asset set must match; only the fields given are compared); {\"expect_stale\": bool}; {\"expect_errors\": [codes]} compares the helper error codes emitted since the previous expect_errors (empty list: none); {\"advance_ms\": n} advances the client's test clock by n ms and runs every timer that falls due (the reorder window, the minimum snapshot interval, retry backoff); SDKs inject this clock for tests, so no case depends on real time. Real network I/O is unaffected. Rules: start = subscribe balances, wait for subscribed, fetch the owner id and compare it with the WS authenticated user_id (mismatch: error ACCOUNT_MISMATCH, stale, no snapshot, never merge), then fetch a snapshot while buffering events, then apply buffered events newer than it. An event is applied only if data.sequence > the stored sequence for that asset (an unknown asset is added); a total of 0 removes the row and leaves a tombstone with its sequence, and a snapshot row at or below a tombstone's sequence is ignored. Refetch on: a frame-sequence gap on balances (the first frame after subscribed is the baseline; a lower number is late, not lost; a higher number is a gap if the missing numbers do not arrive within reorder_window_ms), balances.resync, CONCURRENT_MODIFICATION with a null id, a reconnect, and authChanged (then re-check the owner after the re-subscribe). Never refetch because data.sequence skipped values. Triggers during a fetch coalesce into one more fetch. A successful snapshot starts min_snapshot_interval_ms before the next may start (trailing). stale is true from a trigger until the next snapshot is applied.",
+  "cases": [
+    {
+      "id": "baseline_mid_count",
+      "options": {
+        "reorder_window_ms": 50,
+        "min_snapshot_interval_ms": 0
+      },
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "live_balances"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "balances"
+              ]
+            }
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "balances"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 0
+          }
+        },
+        {
+          "owner": "aaaa0001"
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 1
+          }
+        },
+        {
+          "snapshot": [
+            {
+              "asset": "USDT",
+              "available": "100",
+              "locked": "0",
+              "pending": "0",
+              "total": "100",
+              "held_incoming": [],
+              "sequence": 40
+            },
+            {
+              "asset": "BTC",
+              "available": "0.5",
+              "locked": "0",
+              "pending": "0",
+              "total": "0.5",
+              "held_incoming": [],
+              "sequence": 7
+            }
+          ]
+        },
+        {
+          "expect_stale": false
+        },
+        {
+          "server": {
+            "type": "balance.updated",
+            "channel": "balances",
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "asset": "USDT",
+              "available": "130",
+              "locked": "0",
+              "pending": "0",
+              "total": "130",
+              "sequence": 43
+            },
+            "sequence": 17
+          }
+        },
+        {
+          "server": {
+            "type": "balance.updated",
+            "channel": "balances",
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "asset": "USDT",
+              "available": "131",
+              "locked": "0",
+              "pending": "0",
+              "total": "131",
+              "sequence": 44
+            },
+            "sequence": 18
+          }
+        },
+        {
+          "advance_ms": 150
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 1
+          }
+        },
+        {
+          "expect_state": {
+            "USDT": {
+              "total": "131",
+              "sequence": 44
+            },
+            "BTC": {
+              "total": "0.5",
+              "sequence": 7
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "gap_refetches",
+      "options": {
+        "reorder_window_ms": 50,
+        "min_snapshot_interval_ms": 0
+      },
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "live_balances"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "balances"
+              ]
+            }
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "balances"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 0
+          }
+        },
+        {
+          "owner": "aaaa0001"
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 1
+          }
+        },
+        {
+          "snapshot": [
+            {
+              "asset": "USDT",
+              "available": "100",
+              "locked": "0",
+              "pending": "0",
+              "total": "100",
+              "held_incoming": [],
+              "sequence": 40
+            },
+            {
+              "asset": "BTC",
+              "available": "0.5",
+              "locked": "0",
+              "pending": "0",
+              "total": "0.5",
+              "held_incoming": [],
+              "sequence": 7
+            }
+          ]
+        },
+        {
+          "expect_stale": false
+        },
+        {
+          "server": {
+            "type": "balance.updated",
+            "channel": "balances",
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "asset": "USDT",
+              "available": "110",
+              "locked": "0",
+              "pending": "0",
+              "total": "110",
+              "sequence": 41
+            },
+            "sequence": 5
+          }
+        },
+        {
+          "server": {
+            "type": "balance.updated",
+            "channel": "balances",
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "asset": "USDT",
+              "available": "120",
+              "locked": "0",
+              "pending": "0",
+              "total": "120",
+              "sequence": 43
+            },
+            "sequence": 7
+          }
+        },
+        {
+          "advance_ms": 150
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 2
+          }
+        },
+        {
+          "expect_stale": true
+        },
+        {
+          "snapshot": [
+            {
+              "asset": "USDT",
+              "available": "125",
+              "locked": "0",
+              "pending": "0",
+              "total": "125",
+              "held_incoming": [],
+              "sequence": 44
+            },
+            {
+              "asset": "BTC",
+              "available": "0.5",
+              "locked": "0",
+              "pending": "0",
+              "total": "0.5",
+              "held_incoming": [],
+              "sequence": 7
+            }
+          ]
+        },
+        {
+          "expect_stale": false
+        },
+        {
+          "expect_state": {
+            "USDT": {
+              "total": "125",
+              "sequence": 44
+            },
+            "BTC": {
+              "total": "0.5",
+              "sequence": 7
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "data_sequence_skip_no_refetch",
+      "options": {
+        "reorder_window_ms": 50,
+        "min_snapshot_interval_ms": 0
+      },
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "live_balances"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "balances"
+              ]
+            }
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "balances"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 0
+          }
+        },
+        {
+          "owner": "aaaa0001"
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 1
+          }
+        },
+        {
+          "snapshot": [
+            {
+              "asset": "USDT",
+              "available": "100",
+              "locked": "0",
+              "pending": "0",
+              "total": "100",
+              "held_incoming": [],
+              "sequence": 40
+            },
+            {
+              "asset": "BTC",
+              "available": "0.5",
+              "locked": "0",
+              "pending": "0",
+              "total": "0.5",
+              "held_incoming": [],
+              "sequence": 7
+            }
+          ]
+        },
+        {
+          "expect_stale": false
+        },
+        {
+          "server": {
+            "type": "balance.updated",
+            "channel": "balances",
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "asset": "USDT",
+              "available": "150",
+              "locked": "0",
+              "pending": "0",
+              "total": "150",
+              "sequence": 42
+            },
+            "sequence": 1
+          }
+        },
+        {
+          "advance_ms": 150
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 1
+          }
+        },
+        {
+          "expect_state": {
+            "USDT": {
+              "total": "150",
+              "sequence": 42
+            },
+            "BTC": {
+              "total": "0.5",
+              "sequence": 7
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "equal_or_lower_sequence_skipped",
+      "options": {
+        "reorder_window_ms": 50,
+        "min_snapshot_interval_ms": 0
+      },
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "live_balances"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "balances"
+              ]
+            }
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "balances"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 0
+          }
+        },
+        {
+          "owner": "aaaa0001"
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 1
+          }
+        },
+        {
+          "snapshot": [
+            {
+              "asset": "USDT",
+              "available": "100",
+              "locked": "0",
+              "pending": "0",
+              "total": "100",
+              "held_incoming": [],
+              "sequence": 40
+            },
+            {
+              "asset": "BTC",
+              "available": "0.5",
+              "locked": "0",
+              "pending": "0",
+              "total": "0.5",
+              "held_incoming": [],
+              "sequence": 7
+            }
+          ]
+        },
+        {
+          "expect_stale": false
+        },
+        {
+          "server": {
+            "type": "balance.updated",
+            "channel": "balances",
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "asset": "USDT",
+              "available": "999",
+              "locked": "0",
+              "pending": "0",
+              "total": "999",
+              "sequence": 40
+            },
+            "sequence": 1
+          }
+        },
+        {
+          "server": {
+            "type": "balance.updated",
+            "channel": "balances",
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "asset": "USDT",
+              "available": "888",
+              "locked": "0",
+              "pending": "0",
+              "total": "888",
+              "sequence": 39
+            },
+            "sequence": 2
+          }
+        },
+        {
+          "advance_ms": 150
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 1
+          }
+        },
+        {
+          "expect_state": {
+            "USDT": {
+              "total": "100",
+              "sequence": 40
+            },
+            "BTC": {
+              "total": "0.5",
+              "sequence": 7
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "events_during_snapshot_buffered",
+      "options": {
+        "reorder_window_ms": 50,
+        "min_snapshot_interval_ms": 0
+      },
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "live_balances"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "balances"
+              ]
+            }
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "balances"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 0
+          }
+        },
+        {
+          "owner": "aaaa0001"
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 1
+          }
+        },
+        {
+          "server": {
+            "type": "balance.updated",
+            "channel": "balances",
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "asset": "USDT",
+              "available": "150",
+              "locked": "0",
+              "pending": "0",
+              "total": "150",
+              "sequence": 41
+            },
+            "sequence": 1
+          }
+        },
+        {
+          "server": {
+            "type": "balance.updated",
+            "channel": "balances",
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "asset": "BTC",
+              "available": "0.1",
+              "locked": "0",
+              "pending": "0",
+              "total": "0.1",
+              "sequence": 6
+            },
+            "sequence": 2
+          }
+        },
+        {
+          "server": {
+            "type": "balance.updated",
+            "channel": "balances",
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "asset": "ETH",
+              "available": "2",
+              "locked": "0",
+              "pending": "0",
+              "total": "2",
+              "sequence": 1
+            },
+            "sequence": 3
+          }
+        },
+        {
+          "snapshot": [
+            {
+              "asset": "USDT",
+              "available": "100",
+              "locked": "0",
+              "pending": "0",
+              "total": "100",
+              "held_incoming": [],
+              "sequence": 40
+            },
+            {
+              "asset": "BTC",
+              "available": "0.5",
+              "locked": "0",
+              "pending": "0",
+              "total": "0.5",
+              "held_incoming": [],
+              "sequence": 7
+            }
+          ]
+        },
+        {
+          "expect_stale": false
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 1
+          }
+        },
+        {
+          "expect_state": {
+            "USDT": {
+              "total": "150",
+              "sequence": 41
+            },
+            "BTC": {
+              "total": "0.5",
+              "sequence": 7
+            },
+            "ETH": {
+              "total": "2",
+              "sequence": 1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "balances_resync_refetches",
+      "options": {
+        "reorder_window_ms": 50,
+        "min_snapshot_interval_ms": 0
+      },
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "live_balances"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "balances"
+              ]
+            }
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "balances"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 0
+          }
+        },
+        {
+          "owner": "aaaa0001"
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 1
+          }
+        },
+        {
+          "snapshot": [
+            {
+              "asset": "USDT",
+              "available": "100",
+              "locked": "0",
+              "pending": "0",
+              "total": "100",
+              "held_incoming": [],
+              "sequence": 40
+            },
+            {
+              "asset": "BTC",
+              "available": "0.5",
+              "locked": "0",
+              "pending": "0",
+              "total": "0.5",
+              "held_incoming": [],
+              "sequence": 7
+            }
+          ]
+        },
+        {
+          "expect_stale": false
+        },
+        {
+          "server": {
+            "type": "balance.updated",
+            "channel": "balances",
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "asset": "USDT",
+              "available": "101",
+              "locked": "0",
+              "pending": "0",
+              "total": "101",
+              "sequence": 41
+            },
+            "sequence": 1
+          }
+        },
+        {
+          "server": {
+            "type": "balances.resync",
+            "channel": "balances",
+            "timestamp": "2026-09-30T08:31:00.000Z",
+            "data": {}
+          }
+        },
+        {
+          "server": {
+            "type": "balance.updated",
+            "channel": "balances",
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "asset": "USDT",
+              "available": "102",
+              "locked": "0",
+              "pending": "0",
+              "total": "102",
+              "sequence": 42
+            },
+            "sequence": 2
+          }
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 2
+          }
+        },
+        {
+          "snapshot": [
+            {
+              "asset": "USDT",
+              "available": "101",
+              "locked": "0",
+              "pending": "0",
+              "total": "101",
+              "held_incoming": [],
+              "sequence": 41
+            },
+            {
+              "asset": "BTC",
+              "available": "0.5",
+              "locked": "0",
+              "pending": "0",
+              "total": "0.5",
+              "held_incoming": [],
+              "sequence": 7
+            }
+          ]
+        },
+        {
+          "advance_ms": 150
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 2
+          }
+        },
+        {
+          "expect_state": {
+            "USDT": {
+              "total": "102",
+              "sequence": 42
+            },
+            "BTC": {
+              "total": "0.5",
+              "sequence": 7
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "concurrent_modification_refetches",
+      "options": {
+        "reorder_window_ms": 50,
+        "min_snapshot_interval_ms": 0
+      },
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "live_balances"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "balances"
+              ]
+            }
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "balances"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 0
+          }
+        },
+        {
+          "owner": "aaaa0001"
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 1
+          }
+        },
+        {
+          "snapshot": [
+            {
+              "asset": "USDT",
+              "available": "100",
+              "locked": "0",
+              "pending": "0",
+              "total": "100",
+              "held_incoming": [],
+              "sequence": 40
+            },
+            {
+              "asset": "BTC",
+              "available": "0.5",
+              "locked": "0",
+              "pending": "0",
+              "total": "0.5",
+              "held_incoming": [],
+              "sequence": 7
+            }
+          ]
+        },
+        {
+          "expect_stale": false
+        },
+        {
+          "server": {
+            "type": "error",
+            "code": "CONCURRENT_MODIFICATION",
+            "message": "This connection fell behind and missed 3 message(s). Fetch a fresh snapshot to resynchronise.",
+            "id": null
+          }
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 2
+          }
+        },
+        {
+          "expect_stale": true
+        },
+        {
+          "snapshot": [
+            {
+              "asset": "USDT",
+              "available": "90",
+              "locked": "0",
+              "pending": "0",
+              "total": "90",
+              "held_incoming": [],
+              "sequence": 45
+            },
+            {
+              "asset": "BTC",
+              "available": "0.5",
+              "locked": "0",
+              "pending": "0",
+              "total": "0.5",
+              "held_incoming": [],
+              "sequence": 7
+            }
+          ]
+        },
+        {
+          "expect_state": {
+            "USDT": {
+              "total": "90",
+              "sequence": 45
+            },
+            "BTC": {
+              "total": "0.5",
+              "sequence": 7
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "triggers_during_fetch_coalesce",
+      "options": {
+        "reorder_window_ms": 50,
+        "min_snapshot_interval_ms": 0
+      },
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "live_balances"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "balances"
+              ]
+            }
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "balances"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 0
+          }
+        },
+        {
+          "owner": "aaaa0001"
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 1
+          }
+        },
+        {
+          "snapshot": [
+            {
+              "asset": "USDT",
+              "available": "100",
+              "locked": "0",
+              "pending": "0",
+              "total": "100",
+              "held_incoming": [],
+              "sequence": 40
+            },
+            {
+              "asset": "BTC",
+              "available": "0.5",
+              "locked": "0",
+              "pending": "0",
+              "total": "0.5",
+              "held_incoming": [],
+              "sequence": 7
+            }
+          ]
+        },
+        {
+          "expect_stale": false
+        },
+        {
+          "server": {
+            "type": "balances.resync",
+            "channel": "balances",
+            "timestamp": "2026-09-30T08:31:00.000Z",
+            "data": {}
+          }
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 2
+          }
+        },
+        {
+          "server": {
+            "type": "balances.resync",
+            "channel": "balances",
+            "timestamp": "2026-09-30T08:31:00.000Z",
+            "data": {}
+          }
+        },
+        {
+          "server": {
+            "type": "error",
+            "code": "CONCURRENT_MODIFICATION",
+            "message": "This connection fell behind and missed 3 message(s). Fetch a fresh snapshot to resynchronise.",
+            "id": null
+          }
+        },
+        {
+          "server": {
+            "type": "balances.resync",
+            "channel": "balances",
+            "timestamp": "2026-09-30T08:31:00.000Z",
+            "data": {}
+          }
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 2
+          }
+        },
+        {
+          "snapshot": [
+            {
+              "asset": "USDT",
+              "available": "100",
+              "locked": "0",
+              "pending": "0",
+              "total": "100",
+              "held_incoming": [],
+              "sequence": 40
+            },
+            {
+              "asset": "BTC",
+              "available": "0.5",
+              "locked": "0",
+              "pending": "0",
+              "total": "0.5",
+              "held_incoming": [],
+              "sequence": 7
+            }
+          ]
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 3
+          }
+        },
+        {
+          "snapshot": [
+            {
+              "asset": "USDT",
+              "available": "100",
+              "locked": "0",
+              "pending": "0",
+              "total": "100",
+              "held_incoming": [],
+              "sequence": 40
+            },
+            {
+              "asset": "BTC",
+              "available": "0.5",
+              "locked": "0",
+              "pending": "0",
+              "total": "0.5",
+              "held_incoming": [],
+              "sequence": 7
+            }
+          ]
+        },
+        {
+          "advance_ms": 150
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 3
+          }
+        },
+        {
+          "expect_stale": false
+        }
+      ]
+    },
+    {
+      "id": "reorder_within_window_is_not_a_gap",
+      "options": {
+        "reorder_window_ms": 50,
+        "min_snapshot_interval_ms": 0
+      },
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "live_balances"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "balances"
+              ]
+            }
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "balances"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 0
+          }
+        },
+        {
+          "owner": "aaaa0001"
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 1
+          }
+        },
+        {
+          "snapshot": [
+            {
+              "asset": "USDT",
+              "available": "100",
+              "locked": "0",
+              "pending": "0",
+              "total": "100",
+              "held_incoming": [],
+              "sequence": 40
+            },
+            {
+              "asset": "BTC",
+              "available": "0.5",
+              "locked": "0",
+              "pending": "0",
+              "total": "0.5",
+              "held_incoming": [],
+              "sequence": 7
+            }
+          ]
+        },
+        {
+          "expect_stale": false
+        },
+        {
+          "server": {
+            "type": "balance.updated",
+            "channel": "balances",
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "asset": "USDT",
+              "available": "101",
+              "locked": "0",
+              "pending": "0",
+              "total": "101",
+              "sequence": 41
+            },
+            "sequence": 1
+          }
+        },
+        {
+          "server": {
+            "type": "balance.updated",
+            "channel": "balances",
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "asset": "USDT",
+              "available": "103",
+              "locked": "0",
+              "pending": "0",
+              "total": "103",
+              "sequence": 43
+            },
+            "sequence": 3
+          }
+        },
+        {
+          "server": {
+            "type": "balance.updated",
+            "channel": "balances",
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "asset": "USDT",
+              "available": "102",
+              "locked": "0",
+              "pending": "0",
+              "total": "102",
+              "sequence": 42
+            },
+            "sequence": 2
+          }
+        },
+        {
+          "advance_ms": 150
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 1
+          }
+        },
+        {
+          "expect_state": {
+            "USDT": {
+              "total": "103",
+              "sequence": 43
+            },
+            "BTC": {
+              "total": "0.5",
+              "sequence": 7
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "zero_total_removes_row_with_tombstone",
+      "options": {
+        "reorder_window_ms": 50,
+        "min_snapshot_interval_ms": 0
+      },
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "live_balances"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "balances"
+              ]
+            }
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "balances"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 0
+          }
+        },
+        {
+          "owner": "aaaa0001"
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 1
+          }
+        },
+        {
+          "snapshot": [
+            {
+              "asset": "USDT",
+              "available": "100",
+              "locked": "0",
+              "pending": "0",
+              "total": "100",
+              "held_incoming": [],
+              "sequence": 40
+            },
+            {
+              "asset": "BTC",
+              "available": "0.5",
+              "locked": "0",
+              "pending": "0",
+              "total": "0.5",
+              "held_incoming": [],
+              "sequence": 7
+            }
+          ]
+        },
+        {
+          "expect_stale": false
+        },
+        {
+          "server": {
+            "type": "balance.updated",
+            "channel": "balances",
+            "timestamp": "2026-09-30T08:30:00.000Z",
+            "data": {
+              "asset": "BTC",
+              "available": "0",
+              "locked": "0",
+              "pending": "0",
+              "total": "0",
+              "sequence": 8
+            },
+            "sequence": 1
+          }
+        },
+        {
+          "expect_state": {
+            "USDT": {
+              "total": "100",
+              "sequence": 40
+            }
+          }
+        },
+        {
+          "server": {
+            "type": "balances.resync",
+            "channel": "balances",
+            "timestamp": "2026-09-30T08:31:00.000Z",
+            "data": {}
+          }
+        },
+        {
+          "snapshot": [
+            {
+              "asset": "USDT",
+              "available": "100",
+              "locked": "0",
+              "pending": "0",
+              "total": "100",
+              "held_incoming": [],
+              "sequence": 40
+            },
+            {
+              "asset": "BTC",
+              "available": "0.5",
+              "locked": "0",
+              "pending": "0",
+              "total": "0.5",
+              "held_incoming": [],
+              "sequence": 7
+            }
+          ]
+        },
+        {
+          "expect_state": {
+            "USDT": {
+              "total": "100",
+              "sequence": 40
+            }
+          }
+        },
+        {
+          "server": {
+            "type": "balances.resync",
+            "channel": "balances",
+            "timestamp": "2026-09-30T08:31:00.000Z",
+            "data": {}
+          }
+        },
+        {
+          "snapshot": [
+            {
+              "asset": "USDT",
+              "available": "100",
+              "locked": "0",
+              "pending": "0",
+              "total": "100",
+              "held_incoming": [],
+              "sequence": 40
+            },
+            {
+              "asset": "BTC",
+              "available": "0.2",
+              "locked": "0",
+              "pending": "0",
+              "total": "0.2",
+              "held_incoming": [],
+              "sequence": 9
+            }
+          ]
+        },
+        {
+          "expect_state": {
+            "USDT": {
+              "total": "100",
+              "sequence": 40
+            },
+            "BTC": {
+              "total": "0.2",
+              "sequence": 9
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "min_snapshot_interval",
+      "options": {
+        "reorder_window_ms": 50,
+        "min_snapshot_interval_ms": 300
+      },
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "live_balances"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "balances"
+              ]
+            }
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "balances"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 0
+          }
+        },
+        {
+          "owner": "aaaa0001"
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 1
+          }
+        },
+        {
+          "snapshot": [
+            {
+              "asset": "USDT",
+              "available": "100",
+              "locked": "0",
+              "pending": "0",
+              "total": "100",
+              "held_incoming": [],
+              "sequence": 40
+            },
+            {
+              "asset": "BTC",
+              "available": "0.5",
+              "locked": "0",
+              "pending": "0",
+              "total": "0.5",
+              "held_incoming": [],
+              "sequence": 7
+            }
+          ]
+        },
+        {
+          "expect_stale": false
+        },
+        {
+          "server": {
+            "type": "balances.resync",
+            "channel": "balances",
+            "timestamp": "2026-09-30T08:31:00.000Z",
+            "data": {}
+          }
+        },
+        {
+          "advance_ms": 50
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 1
+          }
+        },
+        {
+          "advance_ms": 400
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 2
+          }
+        },
+        {
+          "snapshot": [
+            {
+              "asset": "USDT",
+              "available": "100",
+              "locked": "0",
+              "pending": "0",
+              "total": "100",
+              "held_incoming": [],
+              "sequence": 40
+            },
+            {
+              "asset": "BTC",
+              "available": "0.5",
+              "locked": "0",
+              "pending": "0",
+              "total": "0.5",
+              "held_incoming": [],
+              "sequence": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "account_mismatch_never_merges",
+      "options": {
+        "reorder_window_ms": 50,
+        "min_snapshot_interval_ms": 0
+      },
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "live_balances"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "balances"
+              ]
+            }
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "balances"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 0
+          }
+        },
+        {
+          "owner": "bbbb0002"
+        },
+        {
+          "advance_ms": 50
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 0
+          }
+        },
+        {
+          "expect_errors": [
+            "ACCOUNT_MISMATCH"
+          ]
+        },
+        {
+          "expect_stale": true
+        },
+        {
+          "expect_state": {}
+        }
+      ]
+    },
+    {
+      "id": "user_changed_rebinds",
+      "options": {
+        "reorder_window_ms": 50,
+        "min_snapshot_interval_ms": 0
+      },
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "live_balances"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "balances"
+              ]
+            }
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "balances"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 0
+          }
+        },
+        {
+          "owner": "aaaa0001"
+        },
+        {
+          "expect_requests": {
+            "owner": 1,
+            "snapshot": 1
+          }
+        },
+        {
+          "snapshot": [
+            {
+              "asset": "USDT",
+              "available": "100",
+              "locked": "0",
+              "pending": "0",
+              "total": "100",
+              "held_incoming": [],
+              "sequence": 40
+            },
+            {
+              "asset": "BTC",
+              "available": "0.5",
+              "locked": "0",
+              "pending": "0",
+              "total": "0.5",
+              "held_incoming": [],
+              "sequence": 7
+            }
+          ]
+        },
+        {
+          "expect_stale": false
+        },
+        {
+          "client": "auth",
+          "token": "tok_b"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "bbbb0002"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_b"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "balances"
+              ]
+            }
+          ]
+        },
+        {
+          "expect_stale": true
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "balances"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_requests": {
+            "owner": 2,
+            "snapshot": 1
+          }
+        },
+        {
+          "owner": "bbbb0002"
+        },
+        {
+          "expect_requests": {
+            "owner": 2,
+            "snapshot": 2
+          }
+        },
+        {
+          "snapshot": [
+            {
+              "asset": "EUR",
+              "available": "10",
+              "locked": "0",
+              "pending": "0",
+              "total": "10",
+              "held_incoming": [],
+              "sequence": 3
+            }
+          ]
+        },
+        {
+          "expect_stale": false
+        },
+        {
+          "expect_errors": []
+        },
+        {
+          "expect_state": {
+            "EUR": {
+              "total": "10",
+              "sequence": 3
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

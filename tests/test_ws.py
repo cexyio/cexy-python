@@ -17,6 +17,7 @@ from websockets.asyncio.server import ServerConnection, serve
 
 import cexy
 from cexy import ws as cws
+from cexy._generated.models import BalanceResponse
 from cexy.ws import OrderBook, WebSocketClient
 from tests.conftest import load
 
@@ -510,3 +511,84 @@ async def test_refused_private_resubscribe_goes_back_to_pending(server: FakeServ
         await ws.ping()
         await ws.ping()
         assert len(server.ops(-1, "subscribe")) == 3 and ws.channels == {"orders"}
+
+
+async def test_live_balances_unsequenced_events_apply_and_warn_once(
+    server: FakeServer, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def snapshot() -> List[Any]:
+        return [
+            BalanceResponse.model_validate(
+                {
+                    "asset": "USDT",
+                    "available": "100",
+                    "locked": "0",
+                    "pending": "0",
+                    "total": "100",
+                    "held_incoming": [],
+                    "sequence": 40,
+                }
+            )
+        ]
+
+    async with make(server) as ws:
+        await ws.auth("session-token")
+        lb = await ws.live_balances(snapshot=snapshot, account_id="u_1")
+        for _ in range(50):
+            if not lb.stale:
+                break
+            await asyncio.sleep(0.01)
+        assert not lb.stale
+
+        def upd(**d: Any) -> Dict[str, Any]:
+            return {
+                "type": "balance.updated",
+                "channel": "balances",
+                "data": {"available": "0", "locked": "0", "pending": "0", **d},
+            }
+
+        with caplog.at_level("WARNING", logger="cexy.ws"):
+            await server.push(upd(asset="USDT", total="90"))
+            await server.push(upd(asset="USDT", total="80"))
+            await ws.ping()
+        row = lb.get("USDT")
+        assert row.total == cws.Decimal("80") and row.sequence == 40
+        assert sum("without data.sequence" in r.message for r in caplog.records) == 1
+        await server.push(upd(asset="USDT", total="70", sequence=41))
+        await server.push(upd(asset="USDT", total="60", sequence=41))
+        await ws.ping()
+        row = lb.get("USDT")
+        assert row.total == cws.Decimal("70") and row.sequence == 41
+        lb.close()
+
+
+async def test_live_balances_default_owner_mismatch_never_merges(server: FakeServer) -> None:
+    calls: List[str] = []
+
+    class Account:
+        async def id(self) -> str:
+            calls.append("id")
+            return "someone_else"
+
+        async def balances(self) -> List[Any]:
+            calls.append("balances")
+            return []
+
+    class Rest:
+        account = Account()
+
+        async def aclose(self) -> None:
+            pass
+
+    async with make(server) as ws:
+        ws._rest = Rest()  # type: ignore[assignment]
+        await ws.auth("session-token")
+        lb = await ws.live_balances()
+        for _ in range(100):
+            if lb.last_error is not None:
+                break
+            await asyncio.sleep(0.01)
+        assert getattr(lb.last_error, "code", None) == "ACCOUNT_MISMATCH"
+        assert calls == ["id"]
+        assert lb.all() == [] and lb.stale
+        lb.close()

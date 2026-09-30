@@ -126,3 +126,10 @@ def test_sub_account_balances_404_without_retryable_or_json_is_not_found_once(cl
         except cexy.NotFoundError as e:
             assert e.retryable is False
         assert route.call_count == 1
+
+
+@respx.mock
+def test_account_id(client: cexy.Client) -> None:
+    route = respx.get(f"{BASE}/api/v1/account/id").respond(json={"data": {"user_id": "aaaa0001"}})
+    assert client.account.id() == "aaaa0001"
+    assert route.calls.last.request.headers["X-API-Key"] == KEY

@@ -10,6 +10,20 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Discriminator, Field,
 from cexy._enum import OpenEnum
 
 
+class AccountIdResponse(BaseModel):
+    """
+    The id of the account a credential belongs to, and nothing else.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    user_id: Annotated[
+        str,
+        Field(description="Account id: the same hex as the realtime `authenticated` reply's `user_id`."),
+    ]
+
+
 class ApiScope(OpenEnum):
     """
     Scope attached to an API key.
@@ -1161,6 +1175,12 @@ class BalanceResponse(BaseModel):
             description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
         ),
     ]
+    sequence: Annotated[
+        Optional[int],
+        Field(
+            description="This balance's sequence: it rises with every change to it, and `balance.updated` carries the same number as `data.sequence`. Apply an event only if its sequence is greater than the one this snapshot holds. 0 for a balance never touched."
+        ),
+    ] = 0
     total: Annotated[
         Decimal,
         Field(

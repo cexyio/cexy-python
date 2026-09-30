@@ -1,4 +1,4 @@
-"""The facade exposes exactly the 41 allowlisted operations in spec/openapi.sdk.json."""
+"""The facade exposes exactly the 42 allowlisted operations in spec/openapi.sdk.json."""
 
 from __future__ import annotations
 
@@ -35,8 +35,8 @@ def facade_methods(client: Any) -> Dict[str, Any]:
     return found
 
 
-def test_spec_has_41_operations() -> None:
-    assert len(SPEC_OPS) == 41
+def test_spec_has_42_operations() -> None:
+    assert len(SPEC_OPS) == 42
 
 
 @pytest.mark.parametrize("cls", [cexy.Client, cexy.AsyncClient])

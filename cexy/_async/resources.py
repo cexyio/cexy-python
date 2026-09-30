@@ -178,6 +178,14 @@ class AsyncPools(_Resource):
 class AsyncAccount(_Resource):
     """Account reads (``read`` scope)."""
 
+    @operation("get_account_id")
+    async def id(self) -> str:
+        """The account id this API key belongs to (the same hex as the WebSocket's ``authenticated``
+        user id). ``WebSocketClient.live_balances()`` uses it to check that REST snapshots and
+        WebSocket events belong to the same account."""
+        payload = await self._t.request("get_account_id")
+        return m.AccountIdResponse.model_validate(_data(payload)).user_id
+
     @operation("list_balances")
     async def balances(self) -> List[m.BalanceResponse]:
         """Balances per asset.
