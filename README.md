@@ -339,7 +339,9 @@ It refetches by itself on a missed event, `balances.resync`, `CONCURRENT_MODIFIC
 or an account change, at most every `min_snapshot_interval` seconds (default 2), and never because a
 balance's own sequence skipped values. At the start and after every account change it checks that the REST key's account
 (`account.id()`) is the WebSocket's authenticated user: otherwise nothing is merged and
-`last_error.code` is `ACCOUNT_MISMATCH`. `stale` is true while a refetch is pending.
+`last_error.code` is `ACCOUNT_MISMATCH`. `stale` is true while a refetch is pending. With your own
+`snapshot` source, also pass its owner (`owner_id` or `account_id`); without one,
+`live_balances()` raises a `CONFIG` error.
 
 ## Security notes
 

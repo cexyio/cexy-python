@@ -1135,6 +1135,7 @@ class LiveBalances:
                 if owner != ws_user:
                     self._rows.clear()
                     self._tombstones.clear()
+                    self._buffer = []  # events that arrived during the owner lookup
                     self._fetching = False
                     self._again = None
                     self.last_error = AccountMismatchError(ws_user, owner)
