@@ -76,6 +76,15 @@ def build_path(op: Operation, path_params: Optional[Mapping[str, str]]) -> str:
     return path
 
 
+def build_query_string(op: Operation, query: Optional[Mapping[str, Any]]) -> str:
+    """The query string the SDK sends (RFC 3986: ``%20`` for a space, ``%2B`` for a plus), built
+    here rather than by httpx (which writes ``+`` for a space), so a signed request is exactly the
+    request that is sent."""
+    from cexy.auth import encode_component
+
+    return "&".join(f"{encode_component(k)}={encode_component(v)}" for k, v in build_query(op, query).items())
+
+
 def _query_value(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"

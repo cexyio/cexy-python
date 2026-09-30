@@ -67,25 +67,33 @@ class Client:
         authenticator: Optional[Authenticator] = None,
         http_client: Optional[httpx.Client] = None,
         allow_insecure: bool = False,
+        auth: str = "headers",
     ) -> None:
-        auth: Optional[Authenticator]
+        """``auth``: how ``api_key``/``api_secret`` authenticate. ``"headers"`` (default): the
+        ``X-API-Key`` and ``X-API-Secret`` headers. ``"hmac"``: request signing (PLANNED: the API
+        does not accept it yet); the secret never leaves the process, and a key issued before
+        signing existed fails with ``KEY_NOT_SIGNABLE`` (no fallback)."""
+        mode = auth
+        auth_obj: Optional[Authenticator]
         try:
-            auth = build_authenticator(api_key, api_secret)
+            auth_obj = build_authenticator(api_key, api_secret, mode)
         except ValueError as exc:
             raise ConfigurationError(str(exc)) from None
         if authenticator is not None:
-            if auth is not None:
+            if auth_obj is not None:
                 raise ConfigurationError("pass either api_key/api_secret or authenticator, not both")
             if not isinstance(authenticator, Authenticator):
                 raise ConfigurationError("authenticator must implement cexy.auth.Authenticator")
-            auth = authenticator
-        self._auth = auth
+            auth_obj = authenticator
+        self._auth = auth_obj
         if rate_limit_per_minute is None:
             # Server limits: ~120/min per IP for anonymous requests, ~600/min per key.
-            rate_limit_per_minute = DEFAULT_RATE_LIMIT_WITH_KEY if auth is not None else DEFAULT_RATE_LIMIT_ANONYMOUS
+            rate_limit_per_minute = (
+                DEFAULT_RATE_LIMIT_WITH_KEY if auth_obj is not None else DEFAULT_RATE_LIMIT_ANONYMOUS
+            )
         self._transport = SyncTransport(
             base_url=validate_base_url(base_url, allow_insecure),
-            auth=auth,
+            auth=auth_obj,
             timeout=timeout,
             max_retries=max_retries,
             user_agent=user_agent(user_agent_suffix),

@@ -32,7 +32,7 @@ class FakeServer:
     def __init__(self) -> None:
         self.received: List[List[Dict[str, Any]]] = []  # per connection
         self.conns: List[ServerConnection] = []
-        self.welcome = dict(WELCOME)
+        self.welcome: Any = dict(WELCOME)  # or a function of the connection index
         self.reply_to_pings = True
         self.ack_auth = True  # False: never acknowledge auth (to test the timeout)
         self.refuse_subscribe = False  # True: answer subscribe with UNAUTHENTICATED
@@ -43,7 +43,8 @@ class FakeServer:
         self.conns.append(conn)
         msgs: List[Dict[str, Any]] = []
         self.received.append(msgs)
-        await conn.send(json.dumps(self.welcome))
+        welcome = self.welcome(len(self.conns) - 1) if callable(self.welcome) else self.welcome
+        await conn.send(json.dumps(welcome))
         async for raw in conn:
             assert isinstance(raw, str), "client must send text frames"
             msg = json.loads(raw)
