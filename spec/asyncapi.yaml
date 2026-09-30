@@ -27,6 +27,21 @@ info:
       the WebSocket is planned (after request signing).
     - Every client request that carries an `id` is acknowledged with that `id`:
       `authenticated`, `subscribed`, `unsubscribed`, `pong` or `error`.
+
+    Private subscriptions (orders, balances, deposits, withdrawals, account) belong to the account
+    the connection is authenticated as at that moment. They end, without any frame, in three cases.
+    (1) An `auth` frame succeeds for a different account: the `authenticated` reply names the new
+    user_id, and every private subscription made for the previous account has already ended.
+    Authenticating again as the same account, for example with a refreshed token, keeps them.
+    (2) An `auth` frame fails for any reason: the error reply is sent, and the connection is no
+    longer authenticated; private subscribe requests are refused until an `auth` succeeds.
+    (3) The session this connection authenticated with is revoked: the `session.revoked` event with
+    `current: true` is delivered on the `account` channel first, and the connection is then no
+    longer authenticated, as in (2). A revocation of another session of the same account
+    (`current: false`) changes nothing. Public subscriptions are never affected. After (1),
+    re-subscribe the private channels you need; after (2) or (3), authenticate and then
+    re-subscribe. An `UNAUTHENTICATED` error carrying a subscribe request's id is a refused
+    subscribe, not a sign-out. Shared client cases: conformance/ws/private_signout.json.
   license:
     name: MIT
 servers:
@@ -109,10 +124,10 @@ components:
       description: Reply to a client ping (echoes its id), or an unsolicited server pong every 30 s (no id).
       payload: {type: object, required: [type], properties: {type: {const: pong}, id: {type: [string, "null"]}}}
     Authenticated:
-      description: Acknowledges a successful `auth` request; echoes its id.
+      description: Acknowledges a successful `auth` request; echoes its id. `user_id` is always present.
       payload:
         type: object
-        required: [type]
+        required: [type, user_id]
         properties:
           type: {const: authenticated}
           id: {type: [string, "null"]}
@@ -163,6 +178,7 @@ components:
       description: |
         Public: ticker, ticker:{market}, orderbook:{market}, trades:{market}, markets.
         Private (auth required): orders, balances, deposits, withdrawals, account.
-        `account` carries only session.revoked: treat it as "authentication lost"; the server
-        does not close the socket.
+        `account` carries only session.revoked. With `current: true` it means "authentication
+        lost" (private subscriptions end); with `current: false` nothing changes. The server does
+        not close the socket.
       examples: ["ticker:BTC/USDT", "orderbook:BTC/USDT", "orders"]

@@ -68,6 +68,11 @@ BOOK_DEPTH = 50
 
 #: Synthetic events emitted by the client itself (not sent by the server).
 AUTH_LOST = "auth_lost"
+#: The server ended this connection's private subscriptions. ``data``: ``reason``
+#: (``user_changed`` | ``auth_failed`` | ``session_revoked``), ``previous_user_id``, ``user_id``,
+#: ``code`` (auth_failed only) and ``dropped`` (the private channels no longer held; they are
+#: re-subscribed automatically, followed by ``resync`` with reason ``reauth``).
+AUTH_CHANGED = "auth_changed"
 RECONNECTED = "reconnected"
 BOOK_STALE = "book_stale"
 RESYNC = "resync"
@@ -89,7 +94,7 @@ KNOWN_EVENT_TYPES = frozenset(
         "session.revoked",
     }
 )
-SYNTHETIC_EVENT_TYPES = frozenset({AUTH_LOST, RECONNECTED, BOOK_STALE, RESYNC})
+SYNTHETIC_EVENT_TYPES = frozenset({AUTH_LOST, AUTH_CHANGED, RECONNECTED, BOOK_STALE, RESYNC})
 
 _warned_versions: Set[int] = set()
 
@@ -298,7 +303,11 @@ class WebSocketClient:
         self._closing = False
         self._ids = itertools.count(1)
         self._pending: Dict[str, asyncio.Future[Dict[str, Any]]] = {}
+        # op and token of each pending auth request, to act on its reply as it arrives
+        self._pending_auth: Dict[str, str] = {}
         self._channels: Set[str] = set()
+        # private channels dropped by a server sign-out, re-subscribed after the next successful auth
+        self._pending_private: Set[str] = set()
         self._books: Dict[str, OrderBook] = {}
         self._handlers: Dict[str, List[Handler]] = collections.defaultdict(list)
         self._queue: Optional[asyncio.Queue[Event]] = None
@@ -365,6 +374,7 @@ class WebSocketClient:
         self._conn = conn
         self.connections += 1
         self.authenticated = False
+        self.user_id = None  # a new connection starts signed out
         self._last_rx = asyncio.get_running_loop().time()
         self._handle_welcome(frame)
         self._ping_task = asyncio.create_task(self._ping_loop(conn))
@@ -419,13 +429,21 @@ class WebSocketClient:
         for book in self._books.values():
             book.reset()
         channels = sorted(self._channels)
-        self._channels.clear()
-        if self._token is not None and any(c in PRIVATE_CHANNELS for c in channels):
+        private = [c for c in channels if c in PRIVATE_CHANNELS]
+        # Public channels are re-subscribed below; private ones stay held through the re-auth,
+        # so a refused token reports them in auth_changed and moves them to pending.
+        self._channels.difference_update(c for c in channels if c not in PRIVATE_CHANNELS)
+        if private and self._token is None:
+            self._channels.difference_update(private)
+            self._pending_private.update(private)
+        elif private or (self._token is not None and self._pending_private):
             try:
-                await self.auth(self._token)
+                await self.auth(self._token)  # type: ignore[arg-type]
             except WebSocketError as exc:
                 logger.warning("cexy.ws: re-auth failed: %s", exc.code)
-                channels = [c for c in channels if c not in PRIVATE_CHANNELS]
+        still_held = [c for c in private if c in self._channels]
+        self._channels.difference_update(still_held)  # not subscribed on this connection yet
+        channels = [c for c in channels if c not in PRIVATE_CHANNELS] + still_held
         if channels:
             await self.subscribe(*channels)
         await self._emit(Event(type=RECONNECTED, data={"channels": channels}))
@@ -468,6 +486,8 @@ class WebSocketClient:
         msg = {**msg, "id": req_id}
         fut: asyncio.Future[Dict[str, Any]] = asyncio.get_running_loop().create_future()
         self._pending[req_id] = fut
+        if msg["op"] == "auth":
+            self._pending_auth[req_id] = msg["token"]
         try:
             await self._send(msg)
             reply = await asyncio.wait_for(fut, self.request_timeout)
@@ -475,9 +495,11 @@ class WebSocketClient:
             raise WebSocketError("TIMEOUT", f"no acknowledgement for {msg['op']}") from None
         finally:
             self._pending.pop(req_id, None)
+            self._pending_auth.pop(req_id, None)
         rtype = reply.get("type")
         if rtype == "error":
-            secrets = (self._token,) if self._token else ()
+            # The token of this request too: a refused token is already forgotten here.
+            secrets = tuple(t for t in (self._token, msg.get("token")) if t)
             raise WebSocketError(str(reply.get("code")), redact_text(str(reply.get("message") or ""), secrets))
         if rtype != expect:
             raise WebSocketError("PROTOCOL", f"expected {expect!r} for {msg['op']}, got {rtype!r}")
@@ -506,10 +528,8 @@ class WebSocketClient:
         logged or put in the URL.
         """
         self._token = token
-        self.authenticated = False
-        reply = await self._request({"op": "auth", "token": token}, "authenticated")
-        self.authenticated = True
-        self.user_id = reply.get("user_id")
+        await self._request({"op": "auth", "token": token}, "authenticated")
+        # authenticated / user_id are set as the reply arrives (see _on_authenticated).
 
     async def subscribe(self, *channels: str) -> SubscribeResult:
         """Subscribe to channels. Channels beyond the 100-subscription limit are refused
@@ -518,9 +538,10 @@ class WebSocketClient:
         for ch in channels:
             if not ch or len(ch) > MAX_CHANNEL_LENGTH:
                 raise ValueError(f"invalid channel name {ch!r} (1-{MAX_CHANNEL_LENGTH} characters)")
-            if ch not in self._channels and ch not in wanted:
+            # Private channels waiting for the next successful auth count as held.
+            if ch not in self._channels and ch not in self._pending_private and ch not in wanted:
                 wanted.append(ch)
-        room = max(0, self.max_subscriptions - len(self._channels))
+        room = max(0, self.max_subscriptions - len(self._channels) - len(self._pending_private))
         send, refused = wanted[:room], wanted[room:]
         if refused:
             logger.warning("cexy.ws: subscription limit %d reached; refused %s", self.max_subscriptions, refused)
@@ -536,6 +557,7 @@ class WebSocketClient:
         """Unsubscribe and wait for the ``unsubscribed`` acknowledgement."""
         for ch in channels:
             self._channels.discard(ch)
+            self._pending_private.discard(ch)
             if ch.startswith("orderbook:"):
                 self._books.pop(ch[len("orderbook:") :], None)
         await self._request({"op": "unsubscribe", "channels": list(channels)}, "unsubscribed")
@@ -543,6 +565,12 @@ class WebSocketClient:
     @property
     def channels(self) -> Set[str]:
         return set(self._channels)
+
+    @property
+    def has_token(self) -> bool:
+        """True while a session token is kept for automatic re-authentication. A refused token
+        and a revoked session are forgotten."""
+        return self._token is not None
 
     # -- order books ---------------------------------------------------------------
 
@@ -610,6 +638,17 @@ class WebSocketClient:
             self._handle_welcome(frame)
             return
         if isinstance(fid, str) and fid in self._pending:
+            token = self._pending_auth.pop(fid, None)
+            if token is not None:
+                # Act on an auth reply as it arrives, before any later frame.
+                if ftype == "authenticated":
+                    uid = frame.get("user_id")
+                    self._on_authenticated(uid if isinstance(uid, str) else None)
+                elif ftype == "error":
+                    # Any error on an auth frame signs the connection out.
+                    if self._token == token:
+                        self._token = None  # a refused token is not re-sent on reconnect
+                    self._signed_out("auth_failed", str(frame.get("code")))
             fut = self._pending[fid]
             if not fut.done():
                 fut.set_result(frame)
@@ -635,10 +674,57 @@ class WebSocketClient:
             if book is not None and book.apply_update(ev) == "stale":
                 self._spawn(self._emit(Event(type=BOOK_STALE, channel=ev.channel, sequence=ev.sequence)))
         self._spawn(self._emit(ev))
-        if ftype == "session.revoked":
-            self.authenticated = False
+        # Only this connection's own session signs it out (the server checks current == true
+        # exactly); current false, missing or not a boolean changes nothing.
+        if ftype == "session.revoked" and isinstance(ev.data, dict) and ev.data.get("current") is True:
             self._token = None  # never re-auth with a revoked session
+            self._signed_out("session_revoked")
             self._spawn(self._emit(Event(type=AUTH_LOST, channel=ev.channel, data=ev.data)))
+
+    def _drop_private(self) -> List[str]:
+        dropped = sorted(c for c in self._channels if c in PRIVATE_CHANNELS)
+        self._channels.difference_update(dropped)
+        self._pending_private.update(dropped)
+        return dropped
+
+    def _signed_out(self, reason: str, code: Optional[str] = None) -> None:
+        """The server signed the connection out and ended every private subscription."""
+        data: Dict[str, Any] = {"reason": reason, "previous_user_id": self.user_id, "user_id": None}
+        if code is not None:
+            data["code"] = code
+        self.authenticated = False
+        self.user_id = None
+        data["dropped"] = self._drop_private()
+        self._spawn(self._emit(Event(type=AUTH_CHANGED, data=data)))
+
+    def _on_authenticated(self, user_id: Optional[str]) -> None:
+        """A successful auth: detect an account switch, then restore pending private channels."""
+        previous = self.user_id if self.authenticated else None
+        self.authenticated = True
+        self.user_id = user_id
+        if previous is not None and user_id != previous:
+            dropped = self._drop_private()
+            data = {"reason": "user_changed", "previous_user_id": previous, "user_id": user_id, "dropped": dropped}
+            self._spawn(self._emit(Event(type=AUTH_CHANGED, data=data)))
+        if not self._pending_private:
+            return
+        channels = sorted(self._pending_private)
+        self._pending_private.clear()
+        self._channels.update(channels)
+        self._spawn(self._resubscribe(channels))
+        self._spawn(self._emit(Event(type=RESYNC, data={"reason": "reauth"})))
+
+    async def _resubscribe(self, channels: List[str]) -> None:
+        try:
+            await self._request({"op": "subscribe", "channels": channels}, "subscribed")
+        except WebSocketError as exc:
+            if exc.code not in ("TIMEOUT", "DISCONNECTED", "NOT_CONNECTED"):
+                # Refused by the server (e.g. signed out again meanwhile): back to pending.
+                for c in channels:
+                    if c in self._channels:
+                        self._channels.discard(c)
+                        self._pending_private.add(c)
+            logger.warning("cexy.ws: private re-subscribe failed: %s", exc.code)
 
     async def _on_error(self, frame: Dict[str, Any]) -> None:
         code = str(frame.get("code"))

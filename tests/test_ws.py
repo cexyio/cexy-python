@@ -34,6 +34,7 @@ class FakeServer:
         self.welcome = dict(WELCOME)
         self.reply_to_pings = True
         self.ack_auth = True  # False: never acknowledge auth (to test the timeout)
+        self.refuse_subscribe = False  # True: answer subscribe with UNAUTHENTICATED
         self.port = 0
         self._server: Any = None
 
@@ -48,7 +49,10 @@ class FakeServer:
             msgs.append(msg)
             # Every request with an id is acknowledged with that id (asyncapi.yaml).
             rid = msg.get("id")
-            if msg["op"] == "subscribe" and any("NOPE" in c for c in msg["channels"]):
+            if msg["op"] == "subscribe" and self.refuse_subscribe:
+                err = {"type": "error", "code": "UNAUTHENTICATED", "message": "authentication required", "id": rid}
+                await conn.send(json.dumps(err))
+            elif msg["op"] == "subscribe" and any("NOPE" in c for c in msg["channels"]):
                 await conn.send(
                     json.dumps({"type": "error", "code": "VALIDATION_FAILED", "message": "unknown market", "id": rid})
                 )
@@ -426,3 +430,83 @@ async def test_ws_error_message_redacts_token(server: FakeServer) -> None:
             await ws.auth("bad-session-token-123")
         assert exc.value.code == "UNAUTHENTICATED"
         assert "bad-session-token-123" not in str(exc.value) and exc.value.message == "invalid token ***"
+
+
+async def test_failed_reauth_then_reconnect_restores_private_on_next_auth(server: FakeServer) -> None:
+    changes: List[cws.Event] = []
+    resyncs: List[cws.Event] = []
+    async with make(server) as ws:
+        ws.on(cws.AUTH_CHANGED, changes.append)
+        ws.on(cws.RESYNC, resyncs.append)
+        await ws.auth("session-token")
+        await ws.subscribe("orders", "ticker:BTC/USDT")
+        with pytest.raises(cws.WebSocketError):
+            await ws.auth("bad-expired-token")
+        await ws.ping()
+        assert ws.channels == {"ticker:BTC/USDT"} and not ws.has_token
+        assert changes[0].data == {
+            "reason": "auth_failed",
+            "previous_user_id": "u_1",
+            "user_id": None,
+            "code": "UNAUTHENTICATED",
+            "dropped": ["orders"],
+        }
+        # while signed out, a private subscribe is not re-sent: it is already pending
+        assert (await ws.subscribe("orders")).added == []
+        await server.drop()
+        await next_event(ws, cws.RECONNECTED)
+        assert server.ops(1, "auth") == []
+        assert [m["channels"] for m in server.ops(1, "subscribe")] == [["ticker:BTC/USDT"]]
+        await ws.auth("session-token-2")
+        await ws.ping()
+        await ws.ping()
+        assert [m["channels"] for m in server.ops(1, "subscribe")][1] == ["orders"]
+        assert [e.data for e in resyncs if e.data.get("reason") == "reauth"] == [{"reason": "reauth"}]
+        assert ws.channels == {"orders", "ticker:BTC/USDT"}
+
+
+async def test_reconnect_with_token_keeps_private_without_reauth_resync(server: FakeServer) -> None:
+    resyncs: List[cws.Event] = []
+    async with make(server) as ws:
+        ws.on(cws.RESYNC, resyncs.append)
+        await ws.auth("session-token")
+        await ws.subscribe("orders", "ticker:BTC/USDT")
+        await server.drop()
+        await next_event(ws, cws.RECONNECTED)
+        ops = [m["op"] for m in server.received[1] if m["op"] != "ping"]
+        assert ops.index("auth") < ops.index("subscribe")
+        assert sorted(c for m in server.ops(1, "subscribe") for c in m["channels"]) == ["orders", "ticker:BTC/USDT"]
+        assert ws.channels == {"orders", "ticker:BTC/USDT"}
+        assert not [e for e in resyncs if (e.data or {}).get("reason") == "reauth"]
+
+
+async def test_session_revoked_current_must_be_true(server: FakeServer) -> None:
+    async with make(server) as ws:
+        await ws.auth("session-token")
+        await ws.subscribe("account", "orders")
+        for current in (False, "true", None):
+            await server.push({**REVOKED, "data": {**REVOKED["data"], "current": current}})
+        await ws.ping()
+        await ws.ping()
+        assert ws.channels == {"account", "orders"} and ws.has_token and ws.authenticated
+
+
+async def test_refused_private_resubscribe_goes_back_to_pending(server: FakeServer) -> None:
+    async with make(server) as ws:
+        await ws.auth("session-token")
+        await ws.subscribe("orders")
+        await server.push(REVOKED)  # current: true
+        await next_event(ws, cws.AUTH_CHANGED)
+        assert ws.channels == set()
+        server.refuse_subscribe = True
+        await ws.auth("session-token-2")
+        await ws.ping()
+        await ws.ping()
+        assert server.ops(-1, "subscribe")[-1]["channels"] == ["orders"]
+        assert ws.channels == set()
+        # still pending: the next successful auth tries again
+        server.refuse_subscribe = False
+        await ws.auth("session-token-3")
+        await ws.ping()
+        await ws.ping()
+        assert len(server.ops(-1, "subscribe")) == 3 and ws.channels == {"orders"}
