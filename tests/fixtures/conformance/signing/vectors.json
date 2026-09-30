@@ -1,0 +1,175 @@
+{
+  "scheme": "CEXY-HMAC-SHA256-v1",
+  "key_id": "ak_vector0000000",
+  "secret": "vKq3Yb7lW0cN2sR9tUe5xZa1dFh4jMp6oQi8gHs0Ly2",
+  "timestamp": "1790000000000",
+  "nonce": "n0nce-vector-000001",
+  "rest": [
+    {
+      "name": "get_no_query",
+      "method": "GET",
+      "request_target": "/api/v1/account/balances",
+      "body": "",
+      "canonical_path": "/api/v1/account/balances",
+      "canonical_query": "",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical_request": "CEXY-HMAC-SHA256-v1\nGET\n/api/v1/account/balances\n\n1790000000000\nn0nce-vector-000001\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "headers": {
+        "X-API-Key": "ak_vector0000000",
+        "X-API-Timestamp": "1790000000000",
+        "X-API-Nonce": "n0nce-vector-000001",
+        "X-API-Signature": "0cafa8b8ceed6daef239d817d0f867ce6c0d353947a38687db4a6db83fff90de"
+      }
+    },
+    {
+      "name": "get_empty_query_trailing_question_mark",
+      "method": "GET",
+      "request_target": "/api/v1/account/balances?",
+      "body": "",
+      "canonical_path": "/api/v1/account/balances",
+      "canonical_query": "",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical_request": "CEXY-HMAC-SHA256-v1\nGET\n/api/v1/account/balances\n\n1790000000000\nn0nce-vector-000001\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "headers": {
+        "X-API-Key": "ak_vector0000000",
+        "X-API-Timestamp": "1790000000000",
+        "X-API-Nonce": "n0nce-vector-000001",
+        "X-API-Signature": "0cafa8b8ceed6daef239d817d0f867ce6c0d353947a38687db4a6db83fff90de"
+      }
+    },
+    {
+      "name": "get_query_unsorted_repeated_reserved",
+      "method": "GET",
+      "request_target": "/api/v1/trading/orders?symbol=BTC%2FUSDT&status=open&limit=50&status=filled&note=a%26b%3Dc",
+      "body": "",
+      "canonical_path": "/api/v1/trading/orders",
+      "canonical_query": "limit=50&note=a%26b%3Dc&status=filled&status=open&symbol=BTC%2FUSDT",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical_request": "CEXY-HMAC-SHA256-v1\nGET\n/api/v1/trading/orders\nlimit=50&note=a%26b%3Dc&status=filled&status=open&symbol=BTC%2FUSDT\n1790000000000\nn0nce-vector-000001\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "headers": {
+        "X-API-Key": "ak_vector0000000",
+        "X-API-Timestamp": "1790000000000",
+        "X-API-Nonce": "n0nce-vector-000001",
+        "X-API-Signature": "395ecc98fc78cdb8a8db095c8fc80224dba94840bcdb9e0fa51e1b2834433778"
+      }
+    },
+    {
+      "name": "get_query_literal_plus_and_space",
+      "method": "GET",
+      "request_target": "/api/v1/trading/trades?q=a+b&r=a%20b&s=a%2Bb",
+      "body": "",
+      "canonical_path": "/api/v1/trading/trades",
+      "canonical_query": "q=a%2Bb&r=a%20b&s=a%2Bb",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical_request": "CEXY-HMAC-SHA256-v1\nGET\n/api/v1/trading/trades\nq=a%2Bb&r=a%20b&s=a%2Bb\n1790000000000\nn0nce-vector-000001\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "headers": {
+        "X-API-Key": "ak_vector0000000",
+        "X-API-Timestamp": "1790000000000",
+        "X-API-Nonce": "n0nce-vector-000001",
+        "X-API-Signature": "3c026faf9a1aac8628631c8c4a3a69aef9c5c43e7b0d3f91d2037439b7258e3b"
+      }
+    },
+    {
+      "name": "get_query_unicode_value",
+      "method": "GET",
+      "request_target": "/api/v1/account/ledger?asset=%C3%9Cber&x=%e2%82%ac",
+      "body": "",
+      "canonical_path": "/api/v1/account/ledger",
+      "canonical_query": "asset=%C3%9Cber&x=%E2%82%AC",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical_request": "CEXY-HMAC-SHA256-v1\nGET\n/api/v1/account/ledger\nasset=%C3%9Cber&x=%E2%82%AC\n1790000000000\nn0nce-vector-000001\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "headers": {
+        "X-API-Key": "ak_vector0000000",
+        "X-API-Timestamp": "1790000000000",
+        "X-API-Nonce": "n0nce-vector-000001",
+        "X-API-Signature": "a47585905c61e13185a24408f5224ec934b9acd6f230371fb2f8f9bf7d22f8ab"
+      }
+    },
+    {
+      "name": "get_path_encoded_slash_in_segment",
+      "method": "GET",
+      "request_target": "/api/v1/trading/orders/by-client-id/sub%2F1",
+      "body": "",
+      "canonical_path": "/api/v1/trading/orders/by-client-id/sub%2F1",
+      "canonical_query": "",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical_request": "CEXY-HMAC-SHA256-v1\nGET\n/api/v1/trading/orders/by-client-id/sub%2F1\n\n1790000000000\nn0nce-vector-000001\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "headers": {
+        "X-API-Key": "ak_vector0000000",
+        "X-API-Timestamp": "1790000000000",
+        "X-API-Nonce": "n0nce-vector-000001",
+        "X-API-Signature": "cfacc9859e597256139ccfed11cc26a217cb0ddf297f9aa107afa6e4dcb44b0b"
+      }
+    },
+    {
+      "name": "get_path_plus_and_tilde_encodings",
+      "method": "GET",
+      "request_target": "/api/v1/trading/orders/by-client-id/a+b%7ec",
+      "body": "",
+      "canonical_path": "/api/v1/trading/orders/by-client-id/a%2Bb~c",
+      "canonical_query": "",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical_request": "CEXY-HMAC-SHA256-v1\nGET\n/api/v1/trading/orders/by-client-id/a%2Bb~c\n\n1790000000000\nn0nce-vector-000001\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "headers": {
+        "X-API-Key": "ak_vector0000000",
+        "X-API-Timestamp": "1790000000000",
+        "X-API-Nonce": "n0nce-vector-000001",
+        "X-API-Signature": "753660d90e3bb63a4460df74763b8647e1059742749300333ebb4fc1395c6c02"
+      }
+    },
+    {
+      "name": "post_json_body",
+      "method": "POST",
+      "request_target": "/api/v1/trading/orders",
+      "body": "{\"symbol\":\"BTC/USDT\",\"side\":\"buy\",\"type\":\"limit\",\"price\":\"61000.10\",\"quantity\":\"0.01\",\"client_order_id\":\"my-1\"}",
+      "canonical_path": "/api/v1/trading/orders",
+      "canonical_query": "",
+      "body_sha256": "f86e94ddd2edb5410004a0c22e5354a30dd595b7ea4016442c06c15f4b5484cd",
+      "canonical_request": "CEXY-HMAC-SHA256-v1\nPOST\n/api/v1/trading/orders\n\n1790000000000\nn0nce-vector-000001\nf86e94ddd2edb5410004a0c22e5354a30dd595b7ea4016442c06c15f4b5484cd",
+      "headers": {
+        "X-API-Key": "ak_vector0000000",
+        "X-API-Timestamp": "1790000000000",
+        "X-API-Nonce": "n0nce-vector-000001",
+        "X-API-Signature": "be64ac9649d5e9b215f820e26e0b243ee1b05f7f8a8981a9aa4e6cd968210a15"
+      }
+    },
+    {
+      "name": "delete_empty_body",
+      "method": "DELETE",
+      "request_target": "/api/v1/trading/orders/6aa9003697a77bccb95b2282",
+      "body": "",
+      "canonical_path": "/api/v1/trading/orders/6aa9003697a77bccb95b2282",
+      "canonical_query": "",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical_request": "CEXY-HMAC-SHA256-v1\nDELETE\n/api/v1/trading/orders/6aa9003697a77bccb95b2282\n\n1790000000000\nn0nce-vector-000001\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "headers": {
+        "X-API-Key": "ak_vector0000000",
+        "X-API-Timestamp": "1790000000000",
+        "X-API-Nonce": "n0nce-vector-000001",
+        "X-API-Signature": "4ec89999a630639b37b20199ce320e324294ddcc9b0c2301db5fbcccb9f56308"
+      }
+    }
+  ],
+  "ws": {
+    "welcome": {
+      "type": "welcome",
+      "connection_id": "c0nnection01",
+      "challenge": "q0R3kX7mV9pT2wZ5nB8cD1fG4hJ6lN0sU3yA5eI7oK0"
+    },
+    "message": "CEXY-WS-AUTH-v1\nc0nnection01\nq0R3kX7mV9pT2wZ5nB8cD1fG4hJ6lN0sU3yA5eI7oK0",
+    "auth_key": {
+      "op": "auth_key",
+      "key_id": "ak_vector0000000",
+      "signature": "98a60217d4bc2c688e951d776d80cddbf0de16a7da082019884cc4b4d3199e7a",
+      "id": "1"
+    }
+  },
+  "negative": {
+    "name": "wrong_secret",
+    "canonical_request": "CEXY-HMAC-SHA256-v1\nGET\n/api/v1/account/balances\n\n1790000000000\nn0nce-vector-000001\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "wrong_secret": "wrong-secret-wrong-secret-wrong-secret-0000",
+    "signature_with_wrong_secret": "8717f5724352c0839319d4b034d6bff9c3a9aea7d0155717975269ea65049537",
+    "signature_with_right_secret": "0cafa8b8ceed6daef239d817d0f867ce6c0d353947a38687db4a6db83fff90de",
+    "note": "the server accepts only signature_with_right_secret"
+  }
+}

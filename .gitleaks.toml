@@ -12,3 +12,6 @@ keywords = ["ak_"]
 [allowlist]
 description = "Placeholders used in docs, examples and tests"
 regexes = ['''ak_your_key_here''', '''ak_test_key''', '''your_secret_here''', '''test_secret''']
+# Signing test vectors (vendored from cexy-api-spec; fixed test constants pinned by SHA-256 in
+# SOURCE.md next to them). Only this exact file is exempt.
+paths = ['''^tests/fixtures/conformance/signing/vectors\.json$''']
