@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import math
 import re
 import secrets as _secrets
 import time
@@ -98,11 +99,13 @@ def canonical_path(path: str) -> str:
 
 def canonical_query(query: str) -> str:
     """Split on "&"; decode and re-encode names and values; sort bytewise by name, then value."""
-    query = query[1:] if query.startswith("?") else query
+    # ``query`` is everything after the first "?" (already split off): a further "?" is data.
     if not query:
         return ""
     pairs = []
     for part in query.split("&"):
+        if not part:
+            continue  # empty parts are dropped: "a=1&&b=2&" is "a=1&b=2"
         name, _, value = part.partition("=")
         pairs.append((_encode_bytes(unquote_to_bytes(name)), _encode_bytes(unquote_to_bytes(value))))
     pairs.sort(key=lambda p: (p[0].encode(), p[1].encode()))
@@ -161,6 +164,8 @@ class HmacAuth:
 
     def adjust_clock(self, server_time_ms: float) -> bool:
         """Adopt the server clock; False (nothing changed) beyond ``MAX_CLOCK_OFFSET_MS``."""
+        if not math.isfinite(server_time_ms):
+            return False
         offset = round(server_time_ms - self._now())
         if abs(offset) > MAX_CLOCK_OFFSET_MS:
             return False

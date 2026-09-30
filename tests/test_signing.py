@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -80,15 +81,47 @@ ORDER = {
 }
 
 
+_UNRESERVED = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+_PCT = re.compile(rb"%([0-9A-Fa-f]{2})")
+
+
+def _indep_enc(s: str) -> str:
+    """Independent of cexy.auth: regex decoding, then a byte-by-byte RFC 3986 encoder."""
+    raw = _PCT.sub(lambda m: bytes([int(m.group(1), 16)]), s.encode("utf-8"))
+    return "".join(chr(b) if b in _UNRESERVED else f"%{b:02X}" for b in raw)
+
+
+def _indep_path(path: str) -> str:
+    return "/".join(_indep_enc(seg) for seg in path.split("/"))
+
+
+def _indep_query(query: str) -> str:
+    pairs = sorted(
+        (_indep_enc(n).encode(), _indep_enc(v).encode())
+        for n, _, v in (part.partition("=") for part in query.split("&") if part)
+    )
+    return "&".join(f"{n.decode()}={v.decode()}" for n, v in pairs)
+
+
+@pytest.mark.parametrize("case", V["rest"], ids=[c["name"] for c in V["rest"]])
+def test_independent_canonicaliser_agrees_with_vectors(case: Dict[str, Any]) -> None:
+    path, query = _split(case["request_target"])
+    assert (_indep_path(path), _indep_query(query)) == (case["canonical_path"], case["canonical_query"])
+
+
+def test_query_rules() -> None:
+    assert canonical_query("a=1&&b=2&") == "a=1&b=2"  # empty parts are dropped
+    assert canonical_query("?a=1") == "%3Fa=1"  # the query is already split off: "?" is data
+
+
 def _verify(method: str, raw_target: str, body: bytes, headers: Dict[str, str]) -> bool:
-    """Independent check (hashlib/hmac, written from the spec text)."""
-    path, _, query = raw_target.partition("?")
+    """Independent check (hashlib/hmac and the canonicaliser above, written from the spec text)."""
     canonical = "\n".join(
         [
             "CEXY-HMAC-SHA256-v1",
             method,
-            canonical_path(path),
-            canonical_query(query),
+            _indep_path(raw_target.partition("?")[0]),
+            _indep_query(raw_target.partition("?")[2]),
             headers.get("x-api-timestamp", ""),
             headers.get("x-api-nonce", ""),
             hashlib.sha256(body).hexdigest(),
@@ -170,6 +203,71 @@ async def test_recording_server_async(recorder: tuple[str, List[Dict[str, Any]]]
         await c.account.ledger(asset="a b", cursor="x+y")
         await c.trading.cancel_order(ORDER["id"])
     assert all(s["valid"] for s in seen) and len(seen) == 2
+
+
+@respx.mock
+async def test_async_transport_signs_the_exact_body_and_every_retry() -> None:
+    route = respx.post(f"{BASE}/api/v1/trading/orders").mock(
+        side_effect=[
+            httpx.Response(503, json={"error": {"code": "SERVICE_UNAVAILABLE", "message": "x", "retryable": True}}),
+            httpx.Response(201, json={"data": {"order": ORDER, "fills": []}}),
+        ]
+    )
+    async with cexy.AsyncClient(api_key=V["key_id"], api_secret=V["secret"], auth="hmac") as c:
+
+        async def no_sleep(_: float) -> None:
+            pass
+
+        c._transport._sleep = no_sleep  # type: ignore[assignment]
+        await c.trading.place_order(
+            "BTC/USDT", "buy", "limit", quantity="1", price="1", client_order_id=ORDER["client_order_id"]
+        )
+    assert route.call_count == 2
+    for call in route.calls:
+        req = call.request
+        hdrs = {k.lower(): v for k, v in req.headers.items()}
+        target = req.url.raw_path.decode()
+        assert req.content.startswith(b"{")
+        assert _verify("POST", target, req.content, hdrs), "the signature must cover the bytes sent"
+    nonces = [c.request.headers["x-api-nonce"] for c in route.calls]
+    assert nonces[0] != nonces[1]
+
+
+@respx.mock
+async def test_async_signature_expired_resends_once() -> None:
+    server_ms = int(time.time() * 1000) + 120_000
+    route = respx.get(f"{BASE}/api/v1/account/balances").mock(
+        side_effect=[_err(401, "SIGNATURE_EXPIRED", server_time_ms=server_ms), httpx.Response(200, json={"data": []})]
+    )
+    async with cexy.AsyncClient(api_key=V["key_id"], api_secret=V["secret"], auth="hmac") as c:
+        await c.account.balances()
+    assert route.call_count == 2
+    assert route.calls[0].request.headers["x-api-nonce"] != route.calls[1].request.headers["x-api-nonce"]
+
+
+@respx.mock
+@pytest.mark.parametrize("bad", [None, "soon", float("nan"), float("inf"), True])
+def test_signature_expired_without_a_usable_server_clock(bad: Any) -> None:
+    details = {} if bad is None else {"server_time_ms": bad}
+    route = respx.get(f"{BASE}/api/v1/account/balances").mock(
+        return_value=httpx.Response(
+            401,
+            content=json.dumps(
+                {"error": {"code": "SIGNATURE_EXPIRED", "message": "expired", "retryable": True, "details": details}}
+            ),
+        )
+    )
+    c = _hmac_client()
+    c._transport.policy.max_retries = 0
+    with pytest.raises(CexyApiError) as exc:
+        c.account.balances()
+    assert exc.value.code == "SIGNATURE_EXPIRED" and "clock" not in exc.value.message
+    assert route.call_count == 1 and c._transport.auth.clock_offset_ms == 0  # type: ignore[union-attr]
+
+
+def test_adjust_clock_refuses_non_finite() -> None:
+    a = HmacAuth(V["key_id"], V["secret"])
+    assert not a.adjust_clock(float("nan")) and not a.adjust_clock(float("inf")) and a.clock_offset_ms == 0
 
 
 def test_headers_mode_unchanged(recorder: tuple[str, List[Dict[str, Any]]]) -> None:
@@ -331,6 +429,61 @@ async def test_auth_key_refused_is_not_retried_and_reconnect_signs_new_challenge
             }
         )
         await t2
+
+
+async def test_a_challenge_is_consumed_when_signed(server: FakeServer) -> None:  # noqa: F811
+    server.welcome = {**server.welcome, "challenge": "only"}
+    async with make(server, key_signer=HmacAuth(V["key_id"], V["secret"]), request_timeout=0.05) as ws:
+        with pytest.raises(cws.WebSocketError) as exc:
+            await ws.auth_key()  # no reply, so no new challenge
+        assert exc.value.code == "TIMEOUT"
+        with pytest.raises(cws.WebSocketError) as exc:
+            await ws.auth_key()
+        assert exc.value.code == "NO_CHALLENGE"
+        assert len(server.ops(-1, "auth_key")) == 1
+
+
+async def test_a_late_reply_still_brings_the_next_challenge(server: FakeServer) -> None:  # noqa: F811
+    server.welcome = {**server.welcome, "challenge": "c-0"}
+    signer = HmacAuth(V["key_id"], V["secret"])
+    async with make(server, key_signer=signer, request_timeout=0.05) as ws:
+        with pytest.raises(cws.WebSocketError):
+            await ws.auth_key()
+        first = server.ops(-1, "auth_key")[0]
+        await server.push(
+            {"type": "authenticated", "user_id": "u_1", "auth": "api_key", "challenge": "late", "id": first["id"]}
+        )
+        await ws.ping()
+        task = __import__("asyncio").ensure_future(ws.auth_key())
+        await _until(lambda: len(server.ops(-1, "auth_key")) == 2)
+        cid = ws.welcome["connection_id"]
+        assert server.ops(-1, "auth_key")[1]["signature"] == signer.sign_websocket_challenge(cid, "late")[1]
+        await server.push(
+            {
+                "type": "authenticated",
+                "user_id": "u_1",
+                "auth": "api_key",
+                "challenge": "n",
+                "id": server.ops(-1, "auth_key")[1]["id"],
+            }
+        )
+        await task
+
+
+async def test_a_late_refusal_stops_automatic_key_reauth(server: FakeServer) -> None:  # noqa: F811
+    server.welcome = lambda n: {**WELCOME_BASE, "challenge": f"c-{n}"}
+    async with make(server, key_signer=HmacAuth(V["key_id"], V["secret"]), request_timeout=0.05) as ws:
+        with pytest.raises(cws.WebSocketError):
+            await ws.auth_key()
+        rid = server.ops(0, "auth_key")[0]["id"]
+        await server.push(
+            {"type": "error", "code": "UNAUTHENTICATED", "message": "bad key", "challenge": "z", "id": rid}
+        )
+        await ws.ping()
+        await server.drop()
+        await _until(lambda: len(server.conns) == 2 and ws.connections == 2)
+        await ws.ping()
+        assert server.ops(1, "auth_key") == []
 
 
 async def test_auth_key_needs_a_signer(server: FakeServer) -> None:  # noqa: F811

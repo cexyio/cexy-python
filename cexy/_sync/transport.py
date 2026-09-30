@@ -9,6 +9,7 @@ edit that file, not this one.
 from __future__ import annotations
 
 import logging
+import math
 import time
 import uuid
 from time import monotonic as _monotonic
@@ -182,7 +183,13 @@ class SyncTransport:
                 )
             if err.code == "SIGNATURE_EXPIRED" and isinstance(self.auth, HmacAuth) and not skew_resent:
                 server_ms = (err.details or {}).get("server_time_ms")
-                if not isinstance(server_ms, (int, float)) or not self.auth.adjust_clock(server_ms):
+                if (
+                    isinstance(server_ms, bool)
+                    or not isinstance(server_ms, (int, float))
+                    or not math.isfinite(server_ms)
+                ):
+                    raise err  # no usable server clock: the error as the server sent it
+                if not self.auth.adjust_clock(server_ms):
                     raise CexyApiError(
                         err.code,
                         "the local clock is more than 1 hour away from the server's: fix the system clock",

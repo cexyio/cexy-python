@@ -360,6 +360,9 @@ class WebSocketClient:
         self._pending: Dict[str, asyncio.Future[Dict[str, Any]]] = {}
         # op and token of each pending auth request, to act on its reply as it arrives
         self._pending_auth: Dict[str, str] = {}
+        # Ids of auth_key requests sent on the current connection: a refusal that arrives after
+        # the timeout still stops the automatic key re-auth.
+        self._auth_key_ids: Set[str] = set()
         self._channels: Set[str] = set()
         # private channels dropped by a server sign-out, re-subscribed after the next successful auth
         self._pending_private: Set[str] = set()
@@ -451,6 +454,7 @@ class WebSocketClient:
         self.welcome = frame
         challenge = frame.get("challenge")
         self._challenge = challenge if isinstance(challenge, str) else None
+        self._auth_key_ids.clear()
         version = frame.get("protocol_version")
         if isinstance(version, int) and version not in KNOWN_PROTOCOL_VERSIONS and version not in _warned_versions:
             _warned_versions.add(version)
@@ -564,6 +568,7 @@ class WebSocketClient:
             self._pending_auth[req_id] = msg["token"]
         elif msg["op"] == "auth_key":
             self._pending_auth[req_id] = _KEY_AUTH
+            self._auth_key_ids.add(req_id)
         try:
             await self._send(msg)
             reply = await asyncio.wait_for(fut, self.request_timeout)
@@ -808,10 +813,16 @@ class WebSocketClient:
         if ftype == "welcome":
             self._handle_welcome(frame)
             return
+        if ftype in ("authenticated", "error") and isinstance(frame.get("challenge"), str):
+            # Every auth_key reply carries the next challenge, even one that arrives after the
+            # request timed out: store it before anything else.
+            self._challenge = frame["challenge"]
+        if ftype == "error" and isinstance(fid, str) and fid not in self._pending and fid in self._auth_key_ids:
+            # A refusal that arrived after the timeout: the server signed the connection out.
+            self._auth_key_ids.discard(fid)
+            self._key_auth = False
+            self._signed_out("auth_failed", str(frame.get("code")))
         if isinstance(fid, str) and fid in self._pending:
-            # Every auth_key reply carries the next challenge: store it before anything else.
-            if isinstance(frame.get("challenge"), str):
-                self._challenge = frame["challenge"]
             token = self._pending_auth.pop(fid, None)
             if token is not None:
                 # Act on an auth reply as it arrives, before any later frame.
