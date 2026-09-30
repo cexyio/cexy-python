@@ -133,3 +133,10 @@ def test_account_id(client: cexy.Client) -> None:
     route = respx.get(f"{BASE}/api/v1/account/id").respond(json={"data": {"user_id": "aaaa0001"}})
     assert client.account.id() == "aaaa0001"
     assert route.calls.last.request.headers["X-API-Key"] == KEY
+
+
+@respx.mock
+async def test_async_account_id() -> None:
+    respx.get(f"{BASE}/api/v1/account/id").respond(json={"data": {"user_id": "aaaa0001"}})
+    async with cexy.AsyncClient(api_key=KEY, api_secret=SECRET, base_url=BASE) as c:
+        assert await c.account.id() == "aaaa0001"

@@ -237,7 +237,8 @@ async def test_concurrent_modification_resyncs_all_books(server: FakeServer) -> 
         book = await ws.order_book("BTC/USDT")
         snaps.sequence = 2000
         await server.push(CONCURRENT)
-        await next_event(ws, cws.RESYNC)
+        ev = await next_event(ws, cws.RESYNC)
+        assert ev.data == {"reason": "concurrent_modification"}
         await until(lambda: snaps.calls == 2 and book.sequence == 2000)
         assert book.synced
 
@@ -695,4 +696,64 @@ async def test_live_balances_owner_lookup_events_dropped_on_mismatch(server: Fak
             await asyncio.sleep(0.01)
         assert getattr(lb.last_error, "code", None) == "ACCOUNT_MISMATCH"
         assert len(lb._buffer) == 0
+        lb.close()
+
+
+async def test_live_balances_retry_backoff_is_capped_at_30s(server: FakeServer) -> None:
+    from tests.test_ws_live_balances import FakeClock
+
+    clock = FakeClock()
+    calls: List[float] = []
+
+    async def snapshot() -> List[Any]:
+        calls.append(clock.now())
+        raise RuntimeError("REST down")
+
+    async with make(server, clock=clock) as ws:
+        await ws.auth("session-token")
+        lb = await ws.live_balances(snapshot=snapshot, account_id="u_1", retry=8)
+        await until(lambda: len(calls) == 1)
+        while len(calls) < 6:
+            n = len(calls)
+            for _ in range(40):  # 1 s steps: each retry is seen at its due second
+                clock.advance(1)
+                await ws.ping()
+                if len(calls) > n:
+                    break
+        gaps = [b - a for a, b in zip(calls, calls[1:])]
+        assert gaps[:3] == [8, 16, 30] and all(g == 30 for g in gaps[2:]), gaps
+        assert isinstance(lb.last_error, RuntimeError)
+        lb.close()
+
+
+async def test_live_balances_close_stops_and_unsubscribes(server: FakeServer) -> None:
+    async def snapshot() -> List[Any]:
+        return []
+
+    async with make(server) as ws:
+        await ws.auth("session-token")
+        lb = await ws.live_balances(snapshot=snapshot, account_id="u_1")
+        assert "balances" in ws.channels
+        lb.close()
+        await ws.ping()
+        await ws.ping()
+        assert "balances" not in ws.channels
+        assert server.ops(-1, "unsubscribe")[-1]["channels"] == ["balances"]
+        lb.close()  # idempotent
+
+
+async def test_live_balances_refetches_after_reconnect(server: FakeServer) -> None:
+    calls = {"n": 0}
+
+    async def snapshot() -> List[Any]:
+        calls["n"] += 1
+        return []
+
+    async with make(server, token="session-token") as ws:
+        lb = await ws.live_balances(snapshot=snapshot, account_id="u_1", min_snapshot_interval=0)
+        await until(lambda: calls["n"] == 1)
+        await server.drop()
+        await next_event(ws, cws.RECONNECTED)
+        await until(lambda: calls["n"] == 2)
+        assert not lb.stale
         lb.close()

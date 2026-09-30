@@ -949,7 +949,7 @@ class WebSocketClient:
         logger.warning("cexy.ws: server error %s: %s", code, frame.get("message"))
         if code == "CONCURRENT_MODIFICATION" and frame.get("id") is None:
             # Messages were dropped: every book and channel may be out of date.
-            await self._emit(Event(type=RESYNC, data={"reason": code}, raw=frame))
+            await self._emit(Event(type=RESYNC, data={"reason": "concurrent_modification"}, raw=frame))
             for lb in list(self._live_balances):
                 lb._trigger("concurrent_modification")
             await self.resync()
