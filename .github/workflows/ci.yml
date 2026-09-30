@@ -4,6 +4,11 @@ on:
   pull_request:
 permissions:
   contents: read
+# The cexy-api-spec commit the spec and conformance tests run against. Pinned so that a spec
+# change cannot silently change what CI tests; bump it in a reviewed PR.
+env:
+  SPEC_COMMIT: 3597ebd8a7465092a5f23a8bc2d96d98b50b1e0c
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -47,7 +52,7 @@ jobs:
         run: git diff --exit-code -- cexy/
       - name: Check out cexy-api-spec
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: {repository: cexyio/cexy-api-spec, path: .cexy-api-spec, persist-credentials: false}
+        with: {repository: cexyio/cexy-api-spec, ref: "${{ env.SPEC_COMMIT }}", path: .cexy-api-spec, persist-credentials: false}
       - name: Vendored spec, conformance fixtures and scanner match cexy-api-spec
         run: |
           scripts/sync_spec.sh .cexy-api-spec --check
