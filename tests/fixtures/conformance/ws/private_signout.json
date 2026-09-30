@@ -1,0 +1,744 @@
+{
+  "description": "Private subscriptions and server-side sign-outs (asyncapi.yaml, 'Private subscriptions ... end, without any frame, in three cases'). Each case is a script run against the SDK's WebSocket client over a scripted server. Step kinds: {\"client\": \"auth\", \"token\": T} calls the public auth method; {\"client\": \"subscribe\", \"channels\": [...]} calls the public subscribe method (a client call that is refused by the server, such as a failed auth, may raise or reject: the runner ignores that error and goes on); {\"server\": FRAME, \"reply_to\": \"auth\"|\"subscribe\"} sends FRAME with the id of the SDK's most recent unanswered request of that op (no reply_to: the frame is sent as given, an unsolicited event); {\"expect_sent\": [...]} compares the frames the SDK sent since the previous expect_sent (ignoring ping), in order, on op and channels/token only (ids are not compared); {\"expect_events\": [...]} compares the tracked events emitted since the previous expect_events, as a set (order within one step is free), on the fields given; {\"expect_held\": [...]} compares the channels the client holds, as a set; {\"expect_token\": true|false} says whether the client still keeps a token for re-authentication. Tracked events (names map to each SDK's idiom): auth_changed {reason: user_changed | auth_failed | session_revoked, previous_user_id, user_id, code (auth_failed only), dropped (set of private channels the client stopped holding)}; resync {reason: \"reauth\"} (private channels were re-subscribed after a sign-out: refetch private state); auth_lost (the existing session-revoked event). Rules: (1) an authenticated ack whose user_id differs from the previous successful auth on this connection drops the held private channels and re-subscribes them at once; the same user_id changes nothing. (2) An error frame whose id is an auth request's id (any code) signs out: held private channels are dropped and kept as pending, the token is forgotten. (3) session.revoked with data.current === true signs out the same way and still emits auth_lost; current false or missing changes nothing. (4) After the next successful auth, pending private channels are re-subscribed and resync {reason: reauth} is emitted, only when there were pending channels. (5) An UNAUTHENTICATED error with a subscribe request's id is a refused subscribe, not a sign-out. Private channels: orders, balances, deposits, withdrawals, account. An expected event list that is empty means no tracked event.",
+  "cases": [
+    {
+      "id": "reauth_other_account",
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "subscribe",
+          "channels": [
+            "orders",
+            "ticker:BTC/USDT"
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "orders",
+              "ticker:BTC/USDT"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "orders",
+                "ticker:BTC/USDT"
+              ]
+            }
+          ]
+        },
+        {
+          "expect_events": []
+        },
+        {
+          "client": "auth",
+          "token": "tok_b"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "bbbb0002"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_b"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "orders"
+              ]
+            }
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "orders"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_events": [
+            {
+              "type": "auth_changed",
+              "reason": "user_changed",
+              "previous_user_id": "aaaa0001",
+              "user_id": "bbbb0002",
+              "dropped": [
+                "orders"
+              ]
+            },
+            {
+              "type": "resync",
+              "reason": "reauth"
+            }
+          ]
+        },
+        {
+          "expect_held": [
+            "orders",
+            "ticker:BTC/USDT"
+          ]
+        },
+        {
+          "expect_token": true
+        }
+      ]
+    },
+    {
+      "id": "reauth_same_account_keeps",
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "subscribe",
+          "channels": [
+            "orders",
+            "balances"
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "orders",
+              "balances"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "orders",
+                "balances"
+              ]
+            }
+          ]
+        },
+        {
+          "client": "auth",
+          "token": "tok_a_refreshed"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a_refreshed"
+            }
+          ]
+        },
+        {
+          "expect_events": []
+        },
+        {
+          "expect_held": [
+            "orders",
+            "balances"
+          ]
+        },
+        {
+          "expect_token": true
+        }
+      ]
+    },
+    {
+      "id": "reauth_other_account_ordering",
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "subscribe",
+          "channels": [
+            "orders"
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "orders"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "client": "auth",
+          "token": "tok_b"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "bbbb0002"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "orders"
+              ]
+            },
+            {
+              "op": "auth",
+              "token": "tok_b"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "orders"
+              ]
+            }
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "orders"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "client": "auth",
+          "token": "tok_b_refreshed"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "bbbb0002"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_b_refreshed"
+            }
+          ]
+        },
+        {
+          "expect_events": [
+            {
+              "type": "auth_changed",
+              "reason": "user_changed",
+              "previous_user_id": "aaaa0001",
+              "user_id": "bbbb0002",
+              "dropped": [
+                "orders"
+              ]
+            },
+            {
+              "type": "resync",
+              "reason": "reauth"
+            }
+          ]
+        },
+        {
+          "expect_held": [
+            "orders"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "failed_reauth_drops_private",
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "subscribe",
+          "channels": [
+            "orders",
+            "trades:BTC/USDT"
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "orders",
+              "trades:BTC/USDT"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "orders",
+                "trades:BTC/USDT"
+              ]
+            }
+          ]
+        },
+        {
+          "client": "auth",
+          "token": "tok_a_expired"
+        },
+        {
+          "server": {
+            "type": "error",
+            "code": "TOKEN_EXPIRED",
+            "message": "token expired"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a_expired"
+            }
+          ]
+        },
+        {
+          "expect_events": [
+            {
+              "type": "auth_changed",
+              "reason": "auth_failed",
+              "previous_user_id": "aaaa0001",
+              "user_id": null,
+              "code": "TOKEN_EXPIRED",
+              "dropped": [
+                "orders"
+              ]
+            }
+          ]
+        },
+        {
+          "expect_held": [
+            "trades:BTC/USDT"
+          ]
+        },
+        {
+          "expect_token": false
+        },
+        {
+          "client": "auth",
+          "token": "tok_a2"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a2"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "orders"
+              ]
+            }
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "orders"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_events": [
+            {
+              "type": "resync",
+              "reason": "reauth"
+            }
+          ]
+        },
+        {
+          "expect_held": [
+            "orders",
+            "trades:BTC/USDT"
+          ]
+        },
+        {
+          "expect_token": true
+        }
+      ]
+    },
+    {
+      "id": "own_session_revoked_drops_private",
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "subscribe",
+          "channels": [
+            "account",
+            "balances",
+            "ticker:BTC/USDT"
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "account",
+              "balances",
+              "ticker:BTC/USDT"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "account",
+                "balances",
+                "ticker:BTC/USDT"
+              ]
+            }
+          ]
+        },
+        {
+          "server": {
+            "type": "session.revoked",
+            "channel": "account",
+            "data": {
+              "session_id": "sess_other",
+              "reason": "logout",
+              "current": false
+            }
+          }
+        },
+        {
+          "expect_events": []
+        },
+        {
+          "expect_held": [
+            "account",
+            "balances",
+            "ticker:BTC/USDT"
+          ]
+        },
+        {
+          "expect_token": true
+        },
+        {
+          "server": {
+            "type": "session.revoked",
+            "channel": "account",
+            "data": {
+              "session_id": null,
+              "reason": "logout_all",
+              "current": true
+            }
+          }
+        },
+        {
+          "expect_sent": []
+        },
+        {
+          "expect_events": [
+            {
+              "type": "auth_changed",
+              "reason": "session_revoked",
+              "previous_user_id": "aaaa0001",
+              "user_id": null,
+              "dropped": [
+                "account",
+                "balances"
+              ]
+            },
+            {
+              "type": "auth_lost"
+            }
+          ]
+        },
+        {
+          "expect_held": [
+            "ticker:BTC/USDT"
+          ]
+        },
+        {
+          "expect_token": false
+        },
+        {
+          "client": "auth",
+          "token": "tok_a_new"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a_new"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "account",
+                "balances"
+              ]
+            }
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "account",
+              "balances"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_events": [
+            {
+              "type": "resync",
+              "reason": "reauth"
+            }
+          ]
+        },
+        {
+          "expect_held": [
+            "account",
+            "balances",
+            "ticker:BTC/USDT"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "first_auth_no_resync",
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_bad"
+        },
+        {
+          "server": {
+            "type": "error",
+            "code": "UNAUTHENTICATED",
+            "message": "invalid token"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "expect_events": [
+            {
+              "type": "auth_changed",
+              "reason": "auth_failed",
+              "previous_user_id": null,
+              "user_id": null,
+              "code": "UNAUTHENTICATED",
+              "dropped": []
+            }
+          ]
+        },
+        {
+          "expect_token": false
+        },
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_bad"
+            },
+            {
+              "op": "auth",
+              "token": "tok_a"
+            }
+          ]
+        },
+        {
+          "expect_events": []
+        },
+        {
+          "expect_held": []
+        },
+        {
+          "expect_token": true
+        }
+      ]
+    },
+    {
+      "id": "subscribe_unauthenticated_not_signout",
+      "steps": [
+        {
+          "client": "subscribe",
+          "channels": [
+            "orders"
+          ]
+        },
+        {
+          "server": {
+            "type": "error",
+            "code": "UNAUTHENTICATED",
+            "message": "authentication required"
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "subscribe",
+              "channels": [
+                "orders"
+              ]
+            }
+          ]
+        },
+        {
+          "expect_events": []
+        },
+        {
+          "expect_held": []
+        },
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a"
+            }
+          ]
+        },
+        {
+          "expect_events": []
+        },
+        {
+          "expect_held": []
+        },
+        {
+          "expect_token": true
+        }
+      ]
+    }
+  ]
+}

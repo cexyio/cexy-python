@@ -8,7 +8,7 @@ Typed Python client for the [CEXY.io](https://cexy.io) exchange REST and WebSock
 - Client-side rate limiting, cursor pagination
 - WebSocket client with heartbeat, reconnect and a self-syncing order book
 
-> Status: **0.1.0.dev7, pre-release.** The API may change before 1.0 (see [Versioning](#versioning)).
+> Status: **0.1.0.dev8, pre-release.** The API may change before 1.0 (see [Versioning](#versioning)).
 > Pre-releases need `--pre`: `pip install --pre cexy`.
 
 ## Install
@@ -301,6 +301,14 @@ The client handles the protocol rules for you:
 WebSocket is not available yet**; with an API key, poll the REST endpoints for private
 state. If the session is revoked, the `account` channel delivers `session.revoked` and the
 client emits `auth_lost`; the socket stays open for public channels.
+
+The server ends private subscriptions, without any frame, when `auth()` succeeds as another
+user, when an `auth()` fails (any error signs the connection out), or when this connection's own
+session is revoked (`session.revoked` with `current: true`). The client emits `auth_changed`
+(`data`: `reason` = `user_changed`, `auth_failed` or `session_revoked`, plus the `dropped`
+channels) and re-subscribes those channels itself: at once for another user, after the next
+successful `auth()` otherwise, followed by `resync` with `{"reason": "reauth"}` (refetch private
+state).
 
 ## Security notes
 

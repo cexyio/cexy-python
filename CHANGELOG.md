@@ -3,6 +3,30 @@
 All notable changes to this project are documented here. The SDK stays at 0.x until API
 request signing (HMAC) ships; see "Versioning" in README.md.
 
+## 0.1.0.dev8 (2026-09-30)
+
+### Fixed
+- WebSocket: private channels no longer go silent after a server-side sign-out. The server ends
+  every private subscription (without a frame) when `auth()` succeeds as another user, when an
+  `auth()` fails, or when this connection's own session is revoked. The client kept those
+  channels (on a revoked session and a failed auth) or never noticed the switch, so
+  `subscribe()` for them sent nothing. It now drops them, emits the new `auth_changed` event
+  (`data`: `reason`, `previous_user_id`, `user_id`, `code`, `dropped`) and re-subscribes them:
+  at once after a switch to another user, after the next successful `auth()` otherwise,
+  followed by `resync` with `{"reason": "reauth"}`. Re-authenticating as the same user changes
+  nothing.
+- WebSocket: a refused `auth()` token is forgotten, so it is not re-sent after a reconnect.
+- WebSocket: `authenticated` and `user_id` are updated as the server's reply arrives.
+
+### Changed
+- WebSocket: `session.revoked` acts only when `data.current` is exactly `true` (this connection's
+  own session). Another session's revocation (`current: false`) no longer emits `auth_lost` or
+  forgets the token, and the connection stays authenticated. **Behaviour change.**
+
+### Added
+- `WebSocketClient.has_token`, the `AUTH_CHANGED` event type.
+- Conformance: runs `conformance/ws/private_signout.json` (vendored) against a scripted server.
+
 ## 0.1.0.dev7 (2026-09-29)
 
 ### Added
