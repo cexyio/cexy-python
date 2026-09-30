@@ -5,6 +5,12 @@ request signing (HMAC) ships; see "Versioning" in README.md.
 
 ## Unreleased
 
+### Changed
+- WebSocket: the `resync` event for a `CONCURRENT_MODIFICATION` error frame now carries
+  `{"reason": "concurrent_modification"}` (lowercase, like every other resync reason and the other
+  SDKs) instead of `"CONCURRENT_MODIFICATION"`. **Behaviour change** for code that compared the
+  uppercase value.
+
 ### Fixed
 - `LiveBalances`: events that arrived while the owner lookup was in flight are dropped when the
   lookup ends in `ACCOUNT_MISMATCH` (they were kept until the next snapshot).
