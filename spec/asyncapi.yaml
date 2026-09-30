@@ -42,6 +42,47 @@ info:
     re-subscribe the private channels you need; after (2) or (3), authenticate and then
     re-subscribe. An `UNAUTHENTICATED` error carrying a subscribe request's id is a refused
     subscribe, not a sign-out. Shared client cases: conformance/ws/private_signout.json.
+
+    Private event sequences. Every private event frame (orders, balances, deposits, withdrawals,
+    account) carries a frame `sequence` per topic: one account and one channel on one server
+    instance, shared by that account's sockets there. It starts at 1 when the topic is created
+    and restarts at 1 after a server restart, or when the account's last socket on the instance
+    leaves the channel and the topic is created again. A socket that joins an existing topic
+    starts mid-count. Judge gaps only between frames received on the same connection, and take
+    the first frame after `subscribed` as the baseline. Channels with more than one publisher
+    (orders: one per market; account) can swap two adjacent frames within a moment. A lower
+    number than expected is late, not lost, and a higher number should be given a short reorder
+    window (about 250 ms) to fill in before it is treated as a gap. `balances` has a single
+    publisher.
+
+    Live balances. `balance.updated` data carries the balance's own `sequence` (the same value as
+    `sequence` on GET /api/v1/account/balances rows). It never decreases, but it can skip values or
+    repeat, because two quick writes can be delivered as two events carrying the later state. A
+    skip is not a loss. To keep balances live: subscribe to `balances`, wait for `subscribed`,
+    then fetch GET /api/v1/account/balances as the snapshot. Apply an event only when its
+    `data.sequence` is greater than the stored sequence for that asset (an equal value is a
+    duplicate). Fetch a new snapshot on a frame-sequence gap, on `balances.resync`, on a
+    `CONCURRENT_MODIFICATION` error with a null id, and after every reconnect; keep applying
+    newer events after it. Never refetch because `data.sequence` skipped values. `balances.resync`
+    (data `{}`, no frame sequence) means the server could not resume its change stream and events
+    may be missing. Shared client cases: conformance/ws/live_balances.json and
+    conformance/ws/private_sequence_gap.json.
+
+    Currently, the `deposits` and `withdrawals` channels carry only changes made through the API (a
+    withdrawal requested, cancelled, approved, rejected or released). A deposit being credited, or
+    a withdrawal being broadcast or confirmed on chain, produces no frame on those channels; poll
+    the REST lists for those states. The balance change itself arrives on `balances`. A planned
+    server update adds those changes (one publisher per topic) and the `deposits.resync` /
+    `withdrawals.resync` events (data `{}`, no frame sequence), meaning "refetch that list".
+
+    Server sign-out (planned; the server does not send this frame yet, and clients should already
+    handle it). `{"type":"signed_out","reason":"expired"|"revoked"}` (no id,
+    channel or sequence) is sent when this connection's access token expired more than 30 s ago
+    without a new `auth`, or when a periodic check finds its session revoked. Private
+    subscriptions are gone; public subscriptions and the socket stay, and a fresh `auth` on the same
+    socket is accepted (then re-subscribe the private channels). The reason set may grow: treat any
+    value as a sign-out. Re-send `auth` on every token refresh: that keeps the subscriptions and
+    resets the expiry timer. Shared client cases: conformance/ws/server_signout.json.
   license:
     name: MIT
 servers:
@@ -153,7 +194,7 @@ components:
         required: [type, code]
         properties:
           type: {const: error}
-          code: {type: string, description: "Same vocabulary as REST error.code (errors.yaml). Echoes the request id when caused by a request; CONCURRENT_MODIFICATION has a null id."}
+          code: {type: string, description: "Same vocabulary as REST error.code (errors.yaml). Echoes the request id when caused by a request. CONCURRENT_MODIFICATION with a null id means this socket read too slowly and the server dropped events for one of its topics (the message says how many); the connection and subscriptions stay open. It names no channel: fetch fresh snapshots of everything you keep."}
           message: {type: string}
           id: {type: [string, "null"]}
     Event:
@@ -165,10 +206,11 @@ components:
             type: string
             enum: [ticker.update, orderbook.update, trade.new, market.status, order.created, order.updated,
                    order.cancelled, order.filled, balance.updated, deposit.detected, deposit.updated,
-                   deposit.completed, withdrawal.updated, session.revoked]
+                   deposit.completed, withdrawal.updated, session.revoked, balances.resync,
+                   deposits.resync, withdrawals.resync]
             description: Ignore unknown event types (additive changes do not bump protocol_version).
           channel: {type: string}
-          sequence: {type: integer, description: "Per channel; +1 per update; resets on server restart."}
+          sequence: {type: integer, description: "Public channels: per channel, +1 per update, resets on server restart. Private channels: per topic (see the description above). balances.resync has none."}
           timestamp: {type: string, format: date-time}
           data: {type: object, description: "Amounts are decimal strings. orderbook.update data is {symbol, full: true, bids, asks}: always the complete top 50 of both sides, replacing the previous state (there are no deltas)."}
   schemas:

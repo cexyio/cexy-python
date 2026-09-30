@@ -56,6 +56,11 @@ def preprocess(spec: dict) -> dict:
     if "held_incoming" in balance.get("properties", {}):
         balance["required"] = [r for r in balance.get("required", []) if r != "held_incoming"]
         balance["properties"]["held_incoming"]["default"] = []
+    # sequence (live balances, 2026-09-30) likewise: a balance from a server that predates it
+    # decodes with 0 ("never touched"), so any balance.updated event is newer.
+    if "sequence" in balance.get("properties", {}):
+        balance["required"] = [r for r in balance.get("required", []) if r != "sequence"]
+        balance["properties"]["sequence"]["default"] = 0
     hoist_ledger_reference(schemas)
     return spec
 

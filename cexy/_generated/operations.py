@@ -21,6 +21,7 @@ OPERATIONS = {
     "get_balance": Operation(
         "get_balance", "GET", "/api/v1/account/balances/{asset}", "api_key", "read", ("asset",), (), False
     ),
+    "get_account_id": Operation("get_account_id", "GET", "/api/v1/account/id", "api_key", "read", (), (), False),
     "get_ledger": Operation(
         "get_ledger",
         "GET",

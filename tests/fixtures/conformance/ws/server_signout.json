@@ -1,0 +1,436 @@
+{
+  "description": "Server-initiated sign-out and list resyncs (planned server frames; clients should already handle them). Same step kinds and tracked events as private_signout.json. {\"type\":\"signed_out\",\"reason\":R} (no id, channel or sequence) means the server signed this connection out: private subscriptions are gone, public ones and the socket stay, and a fresh auth on the same socket is accepted. The client drops its held private channels into pending, forgets the token, and emits auth_changed with reason token_expired (R = expired), session_revoked (R = revoked, which ALSO emits auth_lost: once the server sends this frame, a revocation seen by another server instance arrives only this way) or signed_out with code R for any other value (the set may grow). Pending private channels are re-subscribed after the next successful auth, followed by resync {reason: reauth}. deposits.resync and withdrawals.resync (data {}, no sequence) emit resync with reason deposits_resync or withdrawals_resync: refetch that list.",
+  "cases": [
+    {
+      "id": "signed_out_expired",
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "subscribe",
+          "channels": [
+            "orders",
+            "ticker:BTC/USDT"
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "orders",
+              "ticker:BTC/USDT"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "orders",
+                "ticker:BTC/USDT"
+              ]
+            }
+          ]
+        },
+        {
+          "expect_events": []
+        },
+        {
+          "server": {
+            "type": "signed_out",
+            "reason": "expired"
+          }
+        },
+        {
+          "expect_sent": []
+        },
+        {
+          "expect_events": [
+            {
+              "type": "auth_changed",
+              "reason": "token_expired",
+              "previous_user_id": "aaaa0001",
+              "user_id": null,
+              "dropped": [
+                "orders"
+              ]
+            }
+          ]
+        },
+        {
+          "expect_held": [
+            "ticker:BTC/USDT"
+          ]
+        },
+        {
+          "expect_token": false
+        },
+        {
+          "client": "auth",
+          "token": "tok_a2"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a2"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "orders"
+              ]
+            }
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "orders"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_events": [
+            {
+              "type": "resync",
+              "reason": "reauth"
+            }
+          ]
+        },
+        {
+          "expect_held": [
+            "orders",
+            "ticker:BTC/USDT"
+          ]
+        },
+        {
+          "expect_token": true
+        }
+      ]
+    },
+    {
+      "id": "signed_out_revoked_also_auth_lost",
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "subscribe",
+          "channels": [
+            "orders",
+            "ticker:BTC/USDT"
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "orders",
+              "ticker:BTC/USDT"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "orders",
+                "ticker:BTC/USDT"
+              ]
+            }
+          ]
+        },
+        {
+          "expect_events": []
+        },
+        {
+          "server": {
+            "type": "signed_out",
+            "reason": "revoked"
+          }
+        },
+        {
+          "expect_events": [
+            {
+              "type": "auth_changed",
+              "reason": "session_revoked",
+              "previous_user_id": "aaaa0001",
+              "user_id": null,
+              "dropped": [
+                "orders"
+              ]
+            },
+            {
+              "type": "auth_lost"
+            }
+          ]
+        },
+        {
+          "expect_held": [
+            "ticker:BTC/USDT"
+          ]
+        },
+        {
+          "expect_token": false
+        },
+        {
+          "client": "auth",
+          "token": "tok_a2"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a2"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "orders"
+              ]
+            }
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "orders"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_events": [
+            {
+              "type": "resync",
+              "reason": "reauth"
+            }
+          ]
+        },
+        {
+          "expect_held": [
+            "orders",
+            "ticker:BTC/USDT"
+          ]
+        },
+        {
+          "expect_token": true
+        }
+      ]
+    },
+    {
+      "id": "signed_out_unknown_reason",
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "subscribe",
+          "channels": [
+            "orders",
+            "ticker:BTC/USDT"
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "orders",
+              "ticker:BTC/USDT"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "orders",
+                "ticker:BTC/USDT"
+              ]
+            }
+          ]
+        },
+        {
+          "expect_events": []
+        },
+        {
+          "server": {
+            "type": "signed_out",
+            "reason": "kicked"
+          }
+        },
+        {
+          "expect_events": [
+            {
+              "type": "auth_changed",
+              "reason": "signed_out",
+              "code": "kicked",
+              "previous_user_id": "aaaa0001",
+              "user_id": null,
+              "dropped": [
+                "orders"
+              ]
+            }
+          ]
+        },
+        {
+          "expect_held": [
+            "ticker:BTC/USDT"
+          ]
+        },
+        {
+          "expect_token": false
+        }
+      ]
+    },
+    {
+      "id": "list_resyncs",
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "subscribe",
+          "channels": [
+            "orders",
+            "ticker:BTC/USDT"
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "orders",
+              "ticker:BTC/USDT"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "orders",
+                "ticker:BTC/USDT"
+              ]
+            }
+          ]
+        },
+        {
+          "expect_events": []
+        },
+        {
+          "server": {
+            "type": "deposits.resync",
+            "channel": "deposits",
+            "timestamp": "2026-09-30T09:00:00.000Z",
+            "data": {}
+          }
+        },
+        {
+          "server": {
+            "type": "withdrawals.resync",
+            "channel": "withdrawals",
+            "timestamp": "2026-09-30T09:00:00.000Z",
+            "data": {}
+          }
+        },
+        {
+          "expect_events": [
+            {
+              "type": "resync",
+              "reason": "deposits_resync"
+            },
+            {
+              "type": "resync",
+              "reason": "withdrawals_resync"
+            }
+          ]
+        },
+        {
+          "expect_held": [
+            "orders",
+            "ticker:BTC/USDT"
+          ]
+        },
+        {
+          "expect_token": true
+        }
+      ]
+    }
+  ]
+}

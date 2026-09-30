@@ -178,6 +178,14 @@ class Pools(_Resource):
 class Account(_Resource):
     """Account reads (``read`` scope)."""
 
+    @operation("get_account_id")
+    def id(self) -> str:
+        """The account id this API key belongs to (the same hex as the WebSocket's ``authenticated``
+        user id). ``WebSocketClient.live_balances()`` uses it to check that REST snapshots and
+        WebSocket events belong to the same account."""
+        payload = self._t.request("get_account_id")
+        return m.AccountIdResponse.model_validate(_data(payload)).user_id
+
     @operation("list_balances")
     def balances(self) -> List[m.BalanceResponse]:
         """Balances per asset.
