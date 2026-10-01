@@ -26,5 +26,8 @@ followed by two hex digits; the server refuses anything else (400), so SDKs must
 What SDKs must reproduce, for every entry in `rest`: `canonical_path`, `canonical_query`,
 `body_sha256`, `canonical_request` and `headers` (the signature). For `ws`, the `message` and the
 `auth_key` frame. For `negative`, only the right secret's signature may verify. The scheme
-(canonical path and query rules, the ±30 s window, `SIGNATURE_EXPIRED`, `NONCE_REUSED`,
+(canonical path and query rules; the timestamp window of 30 s behind and at most 5 s ahead of the
+server clock, outside which the answer is `SIGNATURE_EXPIRED` with `details.server_time_ms`; the
+retryable 503 `SERVICE_UNAVAILABLE` with `details.reason` `nonce_store_warming` and `Retry-After`
+for a few seconds after the server's nonce store restarts empty; `NONCE_REUSED`;
 `KEY_NOT_SIGNABLE`) will be described in `README.md` and `asyncapi.yaml` once it goes live.
