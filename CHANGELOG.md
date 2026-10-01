@@ -6,11 +6,13 @@ request signing (HMAC) ships; see "Versioning" in README.md.
 ## 0.1.0.dev11 (2026-10-01)
 
 ### Changed
-- **Request signing is the default.** `Client(api_key, api_secret)` / `AsyncClient(...)` now sign
+- **Breaking: request signing is the default.** `Client(api_key, api_secret)` / `AsyncClient(...)` now sign
   every private request (`auth="hmac"`); the secret is never sent. The API is switching off the
   old `X-API-Secret` mode. `auth="headers"` still selects it, for servers that accept it. Earlier
   versions default to `headers` and stop working against the API once it refuses the secret,
   unless they pass `auth="hmac"`: upgrade.
+- Keys issued before 2026-10-01 can't sign (`KEY_NOT_SIGNABLE`): create a new API key before
+  upgrading.
 - `SIGNATURE_REQUIRED` (400, the API refuses the secret header) is never retried and its message
   names the fix (`auth="hmac"`).
 
