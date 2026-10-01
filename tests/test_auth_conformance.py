@@ -59,7 +59,7 @@ def test_key_headers_on_private(client: cexy.Client) -> None:
         assert h in headers
     for h in case["expect"]["headers_absent"]:
         assert h not in headers
-    assert headers["X-API-Key"] == KEY and headers["X-API-Secret"] == SECRET
+    assert headers["X-API-Key"] == KEY and SECRET not in "".join(headers.values())
 
 
 @respx.mock

@@ -65,12 +65,13 @@ class AsyncClient:
         authenticator: Optional[Authenticator] = None,
         http_client: Optional[httpx.AsyncClient] = None,
         allow_insecure: bool = False,
-        auth: str = "headers",
+        auth: str = "hmac",
     ) -> None:
-        """``auth``: how ``api_key``/``api_secret`` authenticate. ``"headers"`` (default): the
-        ``X-API-Key`` and ``X-API-Secret`` headers. ``"hmac"``: request signing (accepted by the
-        API since 2026-10-01); the secret never leaves the process, and a key issued before
-        signing existed fails with ``KEY_NOT_SIGNABLE`` (no fallback)."""
+        """``auth``: how ``api_key``/``api_secret`` authenticate. ``"hmac"`` (default): every
+        private request is signed and the secret never leaves the process; a key issued before
+        signing existed fails with ``KEY_NOT_SIGNABLE`` (no fallback). ``"headers"``: the
+        ``X-API-Key`` and ``X-API-Secret`` headers, which the API is switching off
+        (``SIGNATURE_REQUIRED``); kept only for servers that still accept it."""
         mode = auth
         auth_obj: Optional[Authenticator]
         try:
