@@ -18,7 +18,8 @@ subscription. This client implements the rules in ``asyncapi.yaml``:
 
 Authentication: private channels (``orders``, ``balances``, ``deposits``,
 ``withdrawals``, ``account``) need ``auth`` with a *session access token*, or ``auth_key``
-with an API key (``rest=AsyncClient(..., auth="hmac")`` or a ``key_signer``).
+with an API key (``rest=AsyncClient(api_key, api_secret)``, which signs by default, or a
+``key_signer``).
 """
 
 from __future__ import annotations

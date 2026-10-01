@@ -172,6 +172,15 @@ class SyncTransport:
                 return resp.json()
 
             err = from_response(resp.status_code, _json_or_none(resp), resp_headers, self._secrets())
+            if err.code == "SIGNATURE_REQUIRED":
+                raise type(err)(
+                    err.code,
+                    'this API key must sign its requests: use auth="hmac" (the default) instead of "headers"',
+                    status=err.status,
+                    request_id=err.request_id,
+                    details=err.details,
+                    retryable=False,
+                )
             if err.code == "KEY_NOT_SIGNABLE":
                 raise CexyApiError(
                     err.code,

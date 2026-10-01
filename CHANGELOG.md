@@ -3,6 +3,17 @@
 All notable changes to this project are documented here. The SDK stays at 0.x until API
 request signing (HMAC) ships; see "Versioning" in README.md.
 
+## 0.1.0.dev11 (2026-10-01)
+
+### Changed
+- **Request signing is the default.** `Client(api_key, api_secret)` / `AsyncClient(...)` now sign
+  every private request (`auth="hmac"`); the secret is never sent. The API is switching off the
+  old `X-API-Secret` mode. `auth="headers"` still selects it, for servers that accept it. Earlier
+  versions default to `headers` and stop working against the API once it refuses the secret,
+  unless they pass `auth="hmac"`: upgrade.
+- `SIGNATURE_REQUIRED` (400, the API refuses the secret header) is never retried and its message
+  names the fix (`auth="hmac"`).
+
 ## 0.1.0.dev10 (2026-10-01)
 
 ### Added

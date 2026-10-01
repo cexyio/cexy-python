@@ -1,9 +1,10 @@
 """Authentication.
 
 The ``Authenticator`` protocol is the extension point for request authentication.
-Two schemes ship: ``HeaderKeyAuth`` sends the static ``X-API-Key`` and ``X-API-Secret``
-headers (the default), and ``HmacAuth`` signs every request (``auth="hmac"``, accepted by the
-API since 2026-10-01). ``Client`` selects one without changing the public resource API.
+Two schemes ship: ``HmacAuth`` signs every request (the default, ``auth="hmac"``), and
+``HeaderKeyAuth`` sends the static ``X-API-Key`` and ``X-API-Secret`` headers (``auth="headers"``,
+which the API is switching off with ``SIGNATURE_REQUIRED``). ``Client`` selects one without
+changing the public resource API.
 
 The SDK never sends ``Authorization`` headers and has no bearer/session support.
 """
@@ -232,12 +233,12 @@ def redact_value(value: Any, secrets: Sequence[str] = ()) -> Any:
 
 
 def build_authenticator(
-    api_key: Optional[str], api_secret: Optional[str], mode: str = "headers"
+    api_key: Optional[str], api_secret: Optional[str], mode: str = "hmac"
 ) -> Optional[Authenticator]:
     """Validate the key pair locally. Exactly both or neither must be supplied.
 
-    ``mode``: ``"headers"`` (default, ``X-API-Key`` + ``X-API-Secret``) or ``"hmac"`` (request
-    signing)."""
+    ``mode``: ``"hmac"`` (default, request signing) or ``"headers"`` (``X-API-Key`` +
+    ``X-API-Secret``, which the API is switching off)."""
     if mode not in ("headers", "hmac"):
         raise ValueError('auth must be "headers" or "hmac"')
     if bool(api_key) != bool(api_secret):

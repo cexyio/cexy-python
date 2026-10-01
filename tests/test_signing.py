@@ -270,11 +270,39 @@ def test_adjust_clock_refuses_non_finite() -> None:
     assert not a.adjust_clock(float("nan")) and not a.adjust_clock(float("inf")) and a.clock_offset_ms == 0
 
 
-def test_headers_mode_unchanged(recorder: tuple[str, List[Dict[str, Any]]]) -> None:
+def test_signing_is_the_default(recorder: tuple[str, List[Dict[str, Any]]]) -> None:
     base, seen = recorder
     c = cexy.Client(api_key=V["key_id"], api_secret=V["secret"], base_url=base, allow_insecure=True)
     c.trading.cancel_order(ORDER["id"])
+    assert seen[0]["valid"] and "x-api-secret" not in seen[0]["headers"]
+
+
+def test_headers_mode_still_selectable(recorder: tuple[str, List[Dict[str, Any]]]) -> None:
+    base, seen = recorder
+    c = cexy.Client(api_key=V["key_id"], api_secret=V["secret"], auth="headers", base_url=base, allow_insecure=True)
+    c.trading.cancel_order(ORDER["id"])
     assert seen[0]["headers"]["x-api-secret"] == V["secret"] and "x-api-signature" not in seen[0]["headers"]
+
+
+@respx.mock
+def test_signature_required_names_the_fix_and_is_not_retried() -> None:
+    route = respx.get(f"{BASE}/api/v1/account/balances").mock(
+        return_value=httpx.Response(
+            400,
+            json={
+                "error": {
+                    "code": "SIGNATURE_REQUIRED",
+                    "message": "This API key must sign its requests; sending the secret is no longer accepted.",
+                    "retryable": False,
+                }
+            },
+        )
+    )
+    c = cexy.Client(api_key=V["key_id"], api_secret=V["secret"], auth="headers")
+    with pytest.raises(CexyApiError) as exc:
+        c.account.balances()
+    assert exc.value.code == "SIGNATURE_REQUIRED" and 'auth="hmac"' in exc.value.message
+    assert not exc.value.retryable and route.call_count == 1
 
 
 # ---- transport rules ---------------------------------------------------------------------------
