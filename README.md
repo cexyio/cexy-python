@@ -297,9 +297,8 @@ The client handles the protocol rules for you:
 
 **Private channels** (`orders`, `balances`, `deposits`, `withdrawals`, `account`) need
 `await ws.auth(token)` with a session access token; it returns once the server sends
-`authenticated`. **API-key authentication on the
-WebSocket is not available yet**; with an API key, poll the REST endpoints for private
-state. If the session is revoked, the `account` channel delivers `session.revoked` and the
+`authenticated`. With an API key, use `await ws.auth_key()` on a WebSocket built from a
+client with `auth="hmac"` (see [Request signing](#request-signing)). If the session is revoked, the `account` channel delivers `session.revoked` and the
 client emits `auth_lost`; the socket stays open for public channels.
 
 The server ends private subscriptions, without any frame, when `auth()` succeeds as another
@@ -322,10 +321,11 @@ emits `sequence_gap` and `resync` with `{"reason": "sequence_gap", "channel": ..
 channel's state over REST. `balances.resync`, `deposits.resync` and `withdrawals.resync` (the last
 two planned) emit `resync` with `balances_resync`, `deposits_resync` or `withdrawals_resync`.
 
-### Request signing (planned)
+### Request signing
 
-The API will accept signed requests instead of the secret header. The SDK is ready; keep the default
-until the API announces it:
+The API accepts signed requests (since 2026-10-01). Opt in with `auth="hmac"`; the default is still
+`auth="headers"`, which sends the secret in `X-API-Secret` (the API marks that mode
+`Deprecation: true`):
 
 ```python
 client = cexy.Client(api_key=KEY, api_secret=SECRET, auth="hmac")  # default: auth="headers"
@@ -335,6 +335,11 @@ With `auth="hmac"` the secret never leaves your process: every private request i
 (`X-API-Key`, `X-API-Timestamp`, `X-API-Nonce`, `X-API-Signature`), every retry with a fresh
 timestamp and nonce. A key issued before signing existed fails with `KEY_NOT_SIGNABLE`: create a new
 API key. `WebSocketClient(rest=async_client).auth_key()` authenticates a WebSocket with the same key.
+
+The signed timestamp must be at most 30 s behind and 5 s ahead of the server clock: keep the system
+clock synchronised (NTP). After `SIGNATURE_EXPIRED` the client adopts the server clock (at most 1 h
+away) and resends once. For a few seconds after the API's replay-protection store restarts, it may
+answer `503 SERVICE_UNAVAILABLE` (`nonce_store_warming`); reads are retried after `Retry-After`.
 
 ### Live balances
 
@@ -377,9 +382,8 @@ retried after `retry` seconds (default 1), doubling up to 30. At the start and a
 ## Authentication extension point
 
 Credentials are applied by an `cexy.auth.Authenticator` (`apply(method, url, headers, body)`).
-Today's implementation, `HeaderKeyAuth`, sends the static key headers. HMAC request signing
-is planned before 1.0 and will plug in as another authenticator without changing the
-resource API.
+`HeaderKeyAuth` (the default) sends the static key headers; `HmacAuth` (`auth="hmac"`) signs
+each request. Either plugs in without changing the resource API.
 
 ## Versioning
 
