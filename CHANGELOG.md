@@ -5,7 +5,25 @@ request signing (HMAC) ships; see "Versioning" in README.md.
 
 ## Unreleased
 
+### Added
+- Request signing, **planned** (the API does not accept it yet; the default is unchanged):
+  `Client(api_key, api_secret, auth="hmac")` / `AsyncClient(..., auth="hmac")` sign every private
+  request (`CEXY-HMAC-SHA256-v1`: `X-API-Key`, `X-API-Timestamp`, `X-API-Nonce`,
+  `X-API-Signature`) instead of sending `X-API-Secret`. Every attempt, retries included, is signed
+  with a fresh timestamp and nonce. After `SIGNATURE_EXPIRED` the client adopts the server clock
+  (at most 1 h away) and resends once. `KEY_NOT_SIGNABLE` (a key issued before signing) raises an
+  error that names the fix; there is no fallback to `X-API-Secret`. Checked against the spec's
+  signing vectors and a test server that verifies every signature from the raw request it received.
+- WebSocket `auth_key()`, **planned**: authenticates with the API key by signing the server's
+  single-use challenge; re-signs the new challenge after each reconnect; stops automatic key
+  re-auth after a refused key; `key_revoked` / `key_expired` sign-outs. The signer comes from
+  `rest=AsyncClient(..., auth="hmac")` or `key_signer=`. `WebSocketClient.auth_kind` says how the
+  connection is authenticated.
+
 ### Changed
+- Query strings are built by the SDK with RFC 3986 encoding (`%20` for a space, `%2B` for a plus)
+  instead of by httpx (`+` for a space). The server decodes both the same way; this makes a signed
+  request exactly the sent one.
 - WebSocket: the `resync` event for a `CONCURRENT_MODIFICATION` error frame now carries
   `{"reason": "concurrent_modification"}` (lowercase, like every other resync reason and the other
   SDKs) instead of `"CONCURRENT_MODIFICATION"`. **Behaviour change** for code that compared the

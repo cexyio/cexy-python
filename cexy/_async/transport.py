@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import uuid
 from time import monotonic as _monotonic
 from typing import Any, Callable, Dict, Mapping, Optional
@@ -17,14 +18,14 @@ import httpx
 from cexy._common import (
     AUTO,
     build_path,
-    build_query,
+    build_query_string,
     encode_body,
     lower_headers,
     operation,
 )
 from cexy._ratelimit import TokenBucket
 from cexy._retry import MAX_SERVER_WAIT_S, RetryPolicy
-from cexy.auth import Authenticator, redact_text
+from cexy.auth import Authenticator, HmacAuth, redact_text
 from cexy.errors import (
     CexyApiError,
     CexyConnectionError,
@@ -110,8 +111,8 @@ class AsyncTransport:
         op = operation(op_id)
         if op.method != "GET" and idempotency_key is None and op_id not in REPEAT_SAFE_MUTATIONS:
             retries = 0
-        url = self.base_url + build_path(op, path)
-        params = build_query(op, query)
+        qs = build_query_string(op, query)
+        url = self.base_url + build_path(op, path) + (f"?{qs}" if qs else "")
         content = encode_body(body)
         headers: Dict[str, str] = {"User-Agent": self.user_agent, "Accept": "application/json"}
         if content is not None:
@@ -124,6 +125,7 @@ class AsyncTransport:
             headers["Idempotency-Key"] = str(uuid.uuid4()) if idempotency_key == AUTO else idempotency_key
 
         attempt = 0
+        skew_resent = False
         while True:
             wait = self.limiter.acquire()
             if wait > 0:
@@ -137,7 +139,7 @@ class AsyncTransport:
                 # follow_redirects=True: httpx would re-send X-API-Key/X-API-Secret to the target
                 # (it strips only Authorization), and a 307/308 would re-POST an order.
                 resp = await self.http.request(
-                    op.method, url, params=params, content=content, headers=send_headers, follow_redirects=False
+                    op.method, url, content=content, headers=send_headers, follow_redirects=False
                 )
             except httpx.TransportError as exc:
                 ambiguous = not isinstance(exc, _NOT_SENT)
@@ -170,6 +172,34 @@ class AsyncTransport:
                 return resp.json()
 
             err = from_response(resp.status_code, _json_or_none(resp), resp_headers, self._secrets())
+            if err.code == "KEY_NOT_SIGNABLE":
+                raise CexyApiError(
+                    err.code,
+                    "create a new API key; keys issued before request signing can't sign",
+                    status=err.status,
+                    request_id=err.request_id,
+                    details=err.details,
+                    retryable=False,
+                )
+            if err.code == "SIGNATURE_EXPIRED" and isinstance(self.auth, HmacAuth) and not skew_resent:
+                server_ms = (err.details or {}).get("server_time_ms")
+                if (
+                    isinstance(server_ms, bool)
+                    or not isinstance(server_ms, (int, float))
+                    or not math.isfinite(server_ms)
+                ):
+                    raise err  # no usable server clock: the error as the server sent it
+                if not self.auth.adjust_clock(server_ms):
+                    raise CexyApiError(
+                        err.code,
+                        "the local clock is more than 1 hour away from the server's: fix the system clock",
+                        status=err.status,
+                        request_id=err.request_id,
+                        details=err.details,
+                        retryable=False,
+                    )
+                skew_resent = True  # one re-signed resend, outside the retry budget
+                continue
             if on_retry_error is not None and attempt > 0:
                 # An earlier attempt may have reached the server after all.
                 recovered = await on_retry_error(err)

@@ -55,7 +55,7 @@ from websockets.exceptions import ConnectionClosed, WebSocketException
 from cexy._async.client import AsyncClient
 from cexy._common import USER_AGENT, check_scheme
 from cexy._generated import models as m
-from cexy.auth import REDACTED, redact_text
+from cexy.auth import REDACTED, HmacAuth, redact_text
 from cexy.errors import CexyError
 
 logger = logging.getLogger("cexy.ws")
@@ -136,6 +136,10 @@ class Event:
 class SubscribeResult:
     added: List[str]
     refused: List[str]
+
+
+#: Marks a pending ``auth_key`` request in ``_pending_auth`` (tokens are strings).
+_KEY_AUTH: Any = object()
 
 
 class Clock:
@@ -317,6 +321,7 @@ class WebSocketClient:
         allow_insecure: bool = False,
         reorder_window: float = 0.25,
         clock: Optional[Clock] = None,
+        key_signer: Optional[Any] = None,
     ) -> None:
         """``reorder_window``: seconds a missing private sequence number gets to arrive (channels with
         several publishers can swap adjacent frames) before it counts as a gap. ``clock``: TEST-ONLY
@@ -327,6 +332,16 @@ class WebSocketClient:
         self._rest = rest
         self._owns_rest = rest is None
         self._token = token
+        # auth_key() (PLANNED API-key authentication): the signer (an HmacAuth fits; taken from
+        # ``rest`` when it signs requests), the latest unused challenge, and whether the key is the
+        # active credential (re-signed with each new challenge after a reconnect).
+        if key_signer is None and rest is not None and isinstance(getattr(rest, "_auth", None), HmacAuth):
+            key_signer = rest._auth
+        self._key_signer = key_signer
+        self._challenge: Optional[str] = None
+        self._key_auth = False
+        #: How the connection is authenticated (``"api_key"`` or ``"session"``), when the server says.
+        self.auth_kind: Optional[str] = None
         self.ping_interval = ping_interval
         self.liveness_timeout = liveness_timeout
         self.reconnect = reconnect
@@ -345,6 +360,9 @@ class WebSocketClient:
         self._pending: Dict[str, asyncio.Future[Dict[str, Any]]] = {}
         # op and token of each pending auth request, to act on its reply as it arrives
         self._pending_auth: Dict[str, str] = {}
+        # Ids of auth_key requests sent on the current connection: a refusal that arrives after
+        # the timeout still stops the automatic key re-auth.
+        self._auth_key_ids: Set[str] = set()
         self._channels: Set[str] = set()
         # private channels dropped by a server sign-out, re-subscribed after the next successful auth
         self._pending_private: Set[str] = set()
@@ -373,6 +391,8 @@ class WebSocketClient:
         self._supervisor = asyncio.create_task(self._supervise())
         if self._token is not None:
             await self.auth(self._token)
+        elif self._key_auth:
+            await self._auth_key()
 
     async def close(self) -> None:
         self._closing = True
@@ -432,6 +452,9 @@ class WebSocketClient:
 
     def _handle_welcome(self, frame: Dict[str, Any]) -> None:
         self.welcome = frame
+        challenge = frame.get("challenge")
+        self._challenge = challenge if isinstance(challenge, str) else None
+        self._auth_key_ids.clear()
         version = frame.get("protocol_version")
         if isinstance(version, int) and version not in KNOWN_PROTOCOL_VERSIONS and version not in _warned_versions:
             _warned_versions.add(version)
@@ -484,12 +507,16 @@ class WebSocketClient:
         # Public channels are re-subscribed below; private ones stay held through the re-auth,
         # so a refused token reports them in auth_changed and moves them to pending.
         self._channels.difference_update(c for c in channels if c not in PRIVATE_CHANNELS)
-        if private and self._token is None:
+        has_credential = self._token is not None or self._key_auth
+        if private and not has_credential:
             self._channels.difference_update(private)
             self._pending_private.update(private)
-        elif private or (self._token is not None and self._pending_private):
+        elif private or (has_credential and self._pending_private):
             try:
-                await self.auth(self._token)  # type: ignore[arg-type]
+                if self._token is not None:
+                    await self.auth(self._token)
+                else:
+                    await self._auth_key()
             except WebSocketError as exc:
                 logger.warning("cexy.ws: re-auth failed: %s", exc.code)
         still_held = [c for c in private if c in self._channels]
@@ -539,6 +566,9 @@ class WebSocketClient:
         self._pending[req_id] = fut
         if msg["op"] == "auth":
             self._pending_auth[req_id] = msg["token"]
+        elif msg["op"] == "auth_key":
+            self._pending_auth[req_id] = _KEY_AUTH
+            self._auth_key_ids.add(req_id)
         try:
             await self._send(msg)
             reply = await asyncio.wait_for(fut, self.request_timeout)
@@ -579,8 +609,34 @@ class WebSocketClient:
         logged or put in the URL.
         """
         self._token = token
+        self._key_auth = False
         await self._request({"op": "auth", "token": token}, "authenticated")
         # authenticated / user_id are set as the reply arrives (see _on_authenticated).
+
+    async def auth_key(self) -> None:
+        """Authenticate with the client's API key (PLANNED: the server does not accept it yet).
+
+        Signs the server's single-use challenge; the secret never leaves the process. After a
+        reconnect it signs the new connection's challenge automatically. A refused ``auth_key``
+        stops the automatic re-auth (the server closes the socket after 5 failures). Needs a
+        ``key_signer``, or ``rest=AsyncClient(..., auth="hmac")``.
+        """
+        if self._key_signer is None:
+            raise WebSocketError("CONFIG", 'auth_key() needs key_signer= or rest=AsyncClient(..., auth="hmac")')
+        self._token = None
+        self._key_auth = True
+        if self._conn is None:
+            return  # sent on connect
+        await self._auth_key()
+
+    async def _auth_key(self) -> None:
+        challenge = self._challenge
+        connection_id = (self.welcome or {}).get("connection_id")
+        if self._key_signer is None or not challenge or not isinstance(connection_id, str):
+            raise WebSocketError("NO_CHALLENGE", "auth_key(): the server has not issued a challenge on this connection")
+        self._challenge = None  # a challenge is signed at most once
+        key_id, signature = self._key_signer.sign_websocket_challenge(connection_id, challenge)
+        await self._request({"op": "auth_key", "key_id": key_id, "signature": signature}, "authenticated")
 
     async def subscribe(self, *channels: str) -> SubscribeResult:
         """Subscribe to channels. Channels beyond the 100-subscription limit are refused
@@ -757,16 +813,29 @@ class WebSocketClient:
         if ftype == "welcome":
             self._handle_welcome(frame)
             return
+        if ftype in ("authenticated", "error") and isinstance(frame.get("challenge"), str):
+            # Every auth_key reply carries the next challenge, even one that arrives after the
+            # request timed out: store it before anything else.
+            self._challenge = frame["challenge"]
+        if ftype == "error" and isinstance(fid, str) and fid not in self._pending and fid in self._auth_key_ids:
+            # A refusal that arrived after the timeout: the server signed the connection out.
+            self._auth_key_ids.discard(fid)
+            self._key_auth = False
+            self._signed_out("auth_failed", str(frame.get("code")))
         if isinstance(fid, str) and fid in self._pending:
             token = self._pending_auth.pop(fid, None)
             if token is not None:
                 # Act on an auth reply as it arrives, before any later frame.
                 if ftype == "authenticated":
                     uid = frame.get("user_id")
+                    kind = frame.get("auth")
+                    self.auth_kind = kind if isinstance(kind, str) else None
                     self._on_authenticated(uid if isinstance(uid, str) else None)
                 elif ftype == "error":
                     # Any error on an auth frame signs the connection out.
-                    if self._token == token:
+                    if token is _KEY_AUTH:
+                        self._key_auth = False  # a refused key is not tried again automatically
+                    elif self._token == token:
                         self._token = None  # a refused token is not re-sent on reconnect
                     self._signed_out("auth_failed", str(frame.get("code")))
             if ftype == "subscribed":
@@ -793,6 +862,9 @@ class WebSocketClient:
                 self._spawn(self._emit(Event(type=AUTH_LOST, channel="account", data=lost, raw=frame)))
             elif reason == "expired":
                 self._signed_out("token_expired")
+            elif reason in ("key_revoked", "key_expired"):
+                self._key_auth = False
+                self._signed_out(reason)
             else:
                 self._signed_out("signed_out", reason)
             return

@@ -86,6 +86,38 @@
       }
     },
     {
+      "name": "get_query_empty_parts",
+      "method": "GET",
+      "request_target": "/api/v1/trading/orders?a=1&&b=2&",
+      "body": "",
+      "canonical_path": "/api/v1/trading/orders",
+      "canonical_query": "a=1&b=2",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical_request": "CEXY-HMAC-SHA256-v1\nGET\n/api/v1/trading/orders\na=1&b=2\n1790000000000\nn0nce-vector-000001\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "headers": {
+        "X-API-Key": "ak_vector0000000",
+        "X-API-Timestamp": "1790000000000",
+        "X-API-Nonce": "n0nce-vector-000001",
+        "X-API-Signature": "0bceb67babad0b3186c46b6cfd249e6591f0cb32385e948f8f5971e9c2f916fb"
+      }
+    },
+    {
+      "name": "get_query_leading_question_mark",
+      "method": "GET",
+      "request_target": "/api/v1/account/balances??a=1",
+      "body": "",
+      "canonical_path": "/api/v1/account/balances",
+      "canonical_query": "%3Fa=1",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical_request": "CEXY-HMAC-SHA256-v1\nGET\n/api/v1/account/balances\n%3Fa=1\n1790000000000\nn0nce-vector-000001\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "headers": {
+        "X-API-Key": "ak_vector0000000",
+        "X-API-Timestamp": "1790000000000",
+        "X-API-Nonce": "n0nce-vector-000001",
+        "X-API-Signature": "b8f64203311ea29641de3cfa937944b967569e8ed751c40497949719b465c2a3"
+      }
+    },
+    {
       "name": "get_path_encoded_slash_in_segment",
       "method": "GET",
       "request_target": "/api/v1/trading/orders/by-client-id/sub%2F1",
