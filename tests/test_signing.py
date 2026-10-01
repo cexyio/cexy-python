@@ -310,6 +310,53 @@ def test_every_retry_resigns() -> None:
     assert all("x-api-secret" not in c.request.headers for c in route.calls)
 
 
+def _warming() -> httpx.Response:
+    return httpx.Response(
+        503,
+        headers={"Retry-After": "2"},
+        json={
+            "error": {
+                "code": "SERVICE_UNAVAILABLE",
+                "message": "x",
+                "retryable": True,
+                "details": {"reason": "nonce_store_warming"},
+            }
+        },
+    )
+
+
+@respx.mock
+def test_nonce_store_warming_waits_retry_after_and_keeps_the_offset() -> None:
+    route = respx.get(f"{BASE}/api/v1/account/balances").mock(
+        side_effect=[_warming(), httpx.Response(200, json={"data": []})]
+    )
+    c = _hmac_client()
+    sleeps: List[float] = []
+    c._transport._sleep = sleeps.append  # type: ignore[assignment]
+    c.account.balances()
+    assert route.call_count == 2 and len(sleeps) == 1 and 2 <= sleeps[0] <= 3
+    nonces = [call.request.headers["x-api-nonce"] for call in route.calls]
+    assert nonces[0] != nonces[1]
+    assert c._transport.auth.clock_offset_ms == 0  # type: ignore[union-attr]
+
+
+@respx.mock
+async def test_nonce_store_warming_async() -> None:
+    route = respx.get(f"{BASE}/api/v1/account/balances").mock(
+        side_effect=[_warming(), httpx.Response(200, json={"data": []})]
+    )
+    sleeps: List[float] = []
+
+    async def record(d: float) -> None:
+        sleeps.append(d)
+
+    async with cexy.AsyncClient(api_key=V["key_id"], api_secret=V["secret"], auth="hmac") as c:
+        c._transport._sleep = record  # type: ignore[assignment]
+        await c.account.balances()
+        assert c._transport.auth.clock_offset_ms == 0  # type: ignore[union-attr]
+    assert route.call_count == 2 and len(sleeps) == 1 and 2 <= sleeps[0] <= 3
+
+
 @respx.mock
 def test_signature_expired_resends_once() -> None:
     server_ms = int(time.time() * 1000) + 120_000
