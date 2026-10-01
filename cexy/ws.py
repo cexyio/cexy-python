@@ -17,9 +17,8 @@ subscription. This client implements the rules in ``asyncapi.yaml``:
 - ignores unknown event types and warns once on an unknown ``protocol_version``.
 
 Authentication: private channels (``orders``, ``balances``, ``deposits``,
-``withdrawals``, ``account``) need ``auth`` with a *session access token*. **API-key
-authentication on the WebSocket is not available yet** (planned after request signing),
-so API-key users should poll the REST endpoints for private state.
+``withdrawals``, ``account``) need ``auth`` with a *session access token*, or ``auth_key``
+with an API key (``rest=AsyncClient(..., auth="hmac")`` or a ``key_signer``).
 """
 
 from __future__ import annotations
@@ -332,7 +331,7 @@ class WebSocketClient:
         self._rest = rest
         self._owns_rest = rest is None
         self._token = token
-        # auth_key() (PLANNED API-key authentication): the signer (an HmacAuth fits; taken from
+        # auth_key() (API-key authentication): the signer (an HmacAuth fits; taken from
         # ``rest`` when it signs requests), the latest unused challenge, and whether the key is the
         # active credential (re-signed with each new challenge after a reconnect).
         if key_signer is None and rest is not None and isinstance(getattr(rest, "_auth", None), HmacAuth):
@@ -605,8 +604,7 @@ class WebSocketClient:
 
         Waits for the server's ``authenticated`` acknowledgement; raises ``WebSocketError``
         on an ``error`` reply or when no acknowledgement arrives within ``request_timeout``.
-        API-key authentication on the WebSocket is not available yet. The token is never
-        logged or put in the URL.
+        For API-key authentication use ``auth_key``. The token is never logged or put in the URL.
         """
         self._token = token
         self._key_auth = False
@@ -614,7 +612,7 @@ class WebSocketClient:
         # authenticated / user_id are set as the reply arrives (see _on_authenticated).
 
     async def auth_key(self) -> None:
-        """Authenticate with the client's API key (PLANNED: the server does not accept it yet).
+        """Authenticate with the client's API key.
 
         Signs the server's single-use challenge; the secret never leaves the process. After a
         reconnect it signs the new connection's challenge automatically. A refused ``auth_key``

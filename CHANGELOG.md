@@ -6,7 +6,7 @@ request signing (HMAC) ships; see "Versioning" in README.md.
 ## Unreleased
 
 ### Added
-- Request signing, **planned** (the API does not accept it yet; the default is unchanged):
+- Request signing, accepted by the API since 2026-10-01 (opt-in; the default is unchanged):
   `Client(api_key, api_secret, auth="hmac")` / `AsyncClient(..., auth="hmac")` sign every private
   request (`CEXY-HMAC-SHA256-v1`: `X-API-Key`, `X-API-Timestamp`, `X-API-Nonce`,
   `X-API-Signature`) instead of sending `X-API-Secret`. Every attempt, retries included, is signed
@@ -14,7 +14,7 @@ request signing (HMAC) ships; see "Versioning" in README.md.
   (at most 1 h away) and resends once. `KEY_NOT_SIGNABLE` (a key issued before signing) raises an
   error that names the fix; there is no fallback to `X-API-Secret`. Checked against the spec's
   signing vectors and a test server that verifies every signature from the raw request it received.
-- WebSocket `auth_key()`, **planned**: authenticates with the API key by signing the server's
+- WebSocket `auth_key()`: authenticates with the API key by signing the server's
   single-use challenge; re-signs the new challenge after each reconnect; stops automatic key
   re-auth after a refused key; `key_revoked` / `key_expired` sign-outs. The signer comes from
   `rest=AsyncClient(..., auth="hmac")` or `key_signer=`. `WebSocketClient.auth_kind` says how the

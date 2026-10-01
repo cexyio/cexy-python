@@ -70,8 +70,8 @@ class Client:
         auth: str = "headers",
     ) -> None:
         """``auth``: how ``api_key``/``api_secret`` authenticate. ``"headers"`` (default): the
-        ``X-API-Key`` and ``X-API-Secret`` headers. ``"hmac"``: request signing (PLANNED: the API
-        does not accept it yet); the secret never leaves the process, and a key issued before
+        ``X-API-Key`` and ``X-API-Secret`` headers. ``"hmac"``: request signing (accepted by the
+        API since 2026-10-01); the secret never leaves the process, and a key issued before
         signing existed fails with ``KEY_NOT_SIGNABLE`` (no fallback)."""
         mode = auth
         auth_obj: Optional[Authenticator]

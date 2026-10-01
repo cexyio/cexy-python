@@ -1,10 +1,9 @@
 """Authentication.
 
 The ``Authenticator`` protocol is the extension point for request authentication.
-Today CEXY API keys are two static headers (``X-API-Key`` and ``X-API-Secret``), which
-``HeaderKeyAuth`` implements. HMAC request signing is planned before SDK 1.0: it will
-ship as another ``Authenticator`` (it receives the method, URL and body, so it can sign
-them) and ``Client`` will select it without changing the public resource API.
+Two schemes ship: ``HeaderKeyAuth`` sends the static ``X-API-Key`` and ``X-API-Secret``
+headers (the default), and ``HmacAuth`` signs every request (``auth="hmac"``, accepted by the
+API since 2026-10-01). ``Client`` selects one without changing the public resource API.
 
 The SDK never sends ``Authorization`` headers and has no bearer/session support.
 """
@@ -74,7 +73,7 @@ class HeaderKeyAuth:
         raise TypeError("HeaderKeyAuth cannot be pickled (it holds a secret)")
 
 
-#: The signing scheme (PLANNED: the API does not accept signed requests yet).
+#: The signing scheme (accepted by the API since 2026-10-01).
 SIGNING_SCHEME = "CEXY-HMAC-SHA256-v1"
 #: The furthest the client clock may be corrected after ``SIGNATURE_EXPIRED``.
 MAX_CLOCK_OFFSET_MS = 3_600_000
@@ -132,7 +131,7 @@ def new_nonce() -> str:
 
 
 class HmacAuth:
-    """Signs every private request (PLANNED scheme, see ``SIGNING_SCHEME``).
+    """Signs every private request (see ``SIGNING_SCHEME``).
 
     Only ``X-API-Key``, ``X-API-Timestamp``, ``X-API-Nonce`` and ``X-API-Signature`` are sent; the
     secret never leaves the process. ``apply`` runs once per attempt, so every retry is signed with
@@ -238,7 +237,7 @@ def build_authenticator(
     """Validate the key pair locally. Exactly both or neither must be supplied.
 
     ``mode``: ``"headers"`` (default, ``X-API-Key`` + ``X-API-Secret``) or ``"hmac"`` (request
-    signing, PLANNED: the API does not accept it yet)."""
+    signing)."""
     if mode not in ("headers", "hmac"):
         raise ValueError('auth must be "headers" or "hmac"')
     if bool(api_key) != bool(api_secret):
