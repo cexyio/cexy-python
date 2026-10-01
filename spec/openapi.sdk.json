@@ -3450,6 +3450,10 @@
           "FRESH_TWO_FACTOR_REQUIRED",
           "FORBIDDEN",
           "API_KEY_NOT_ALLOWED",
+          "KEY_NOT_SIGNABLE",
+          "SIGNATURE_EXPIRED",
+          "NONCE_REUSED",
+          "SIGNATURE_REQUIRED",
           "FUTURES_RESTRICTED",
           "ACCOUNT_FROZEN",
           "ACCOUNT_ON_HOLD",
@@ -5138,7 +5142,7 @@
         "type": "apiKey",
         "in": "header",
         "name": "X-API-Secret",
-        "description": "Authenticates the key identified by `X-API-Key`. Never sent in a query string: a URL reaches access logs, proxy logs and `Referer` headers."
+        "description": "Deprecated: sign requests instead (`X-API-Timestamp`, `X-API-Nonce`, `X-API-Signature`; see the request-signing guide). Authenticates the key identified by `X-API-Key` by sending its secret; responses to this mode carry `Deprecation: true`. Never sent in a query string."
       }
     }
   }

@@ -15,8 +15,9 @@ cases unchanged byte for byte). A server-side test fails if the file drifts from
   plus 24 lowercase hex digits, and the server refuses any other id before any lookup, on every
   key path. The vector secret was never stored for any key. (Confirmed in writing by the exchange
   backend, 2026-09-30.)
-- Status: the scheme is **planned**. The API does not accept signed requests or `auth_key` yet;
-  SDKs keep sending `X-API-Key` / `X-API-Secret` until it is live.
+- Status: **live** on api.cexy.io since 2026-10-01 (server `e15a2a4`, same vectors). In the SDKs
+  it is opt-in (`hmac`); their default still sends `X-API-Key` / `X-API-Secret`, which the API
+  answers with `Deprecation: true`.
 
 Query rules the new cases pin down: the query is everything after the FIRST `?` (so a second `?`
 is data and canonicalises to `%3F`), and empty `&`-separated parts are dropped. A `%` must be
@@ -30,4 +31,5 @@ What SDKs must reproduce, for every entry in `rest`: `canonical_path`, `canonica
 server clock, outside which the answer is `SIGNATURE_EXPIRED` with `details.server_time_ms`; the
 retryable 503 `SERVICE_UNAVAILABLE` with `details.reason` `nonce_store_warming` and `Retry-After`
 for a few seconds after the server's nonce store restarts empty; `NONCE_REUSED`;
-`KEY_NOT_SIGNABLE`) will be described in `README.md` and `asyncapi.yaml` once it goes live.
+`KEY_NOT_SIGNABLE`) is to be described in `README.md` and `asyncapi.yaml` (follow-up); until
+then the API's live OpenAPI document (`/api/v1/openapi.json`) is the reference.
