@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. The SDK stays at 0.x until API
 request signing (HMAC) ships; see "Versioning" in README.md.
 
-## Unreleased
+## 0.1.0.dev10 (2026-10-01)
 
 ### Added
 - Error codes from the live API: `KEY_NOT_SIGNABLE`, `SIGNATURE_EXPIRED`, `NONCE_REUSED` and
