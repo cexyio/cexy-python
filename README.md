@@ -333,6 +333,24 @@ The client handles the protocol rules for you:
   (`authenticated`, `subscribed`, `unsubscribed`, `pong`). An `error` acknowledgement, or none
   within `request_timeout`, raises `cexy.ws.WebSocketError`. `await ws.ping()` returns the
   round-trip time.
+- **Subscribe refusals.** The server refuses channels one by one: an `error` frame with the
+  request's id for each refused channel, then one `subscribed` ack listing the accepted ones (no
+  ack at all when none was accepted). `subscribe()` collects them and returns the accepted
+  channels in `added` and the refused ones in `refused`, with each server error in `errors`; every
+  refusal is also emitted as a `subscribe_refused` event. Refused channels are not held and never
+  retried automatically (error frames carry no retry hint: back off yourself, about 60 s after
+  `RATE_LIMITED`). Only when every channel sent was refused does it raise
+  `SubscribeRefusedError` (a `WebSocketError` with the first error's `code`, and `.result`). A
+  timeout counts as "all refused" once at least one error frame has arrived; with no ack and no
+  error it raises `TIMEOUT` and the channels stay held, so a reconnect sends them again. Errors
+  pair with the channels missing from the ack, in the order sent (spot names compared ignoring
+  case, as the server normalises them; futures names exactly); if there are fewer errors than
+  missing channels (the server stops at its 100-subscription limit), the last error covers the
+  rest.
+- **Re-subscribing by itself** (after a reconnect, a re-auth, or `futures.resync` on
+  `futures.account`): every refusal is reported as `subscribe_refused`. A private channel refused
+  `UNAUTHENTICATED` goes back to pending and is subscribed after the next successful auth; any
+  other refusal drops the channel.
 - Unknown event types are ignored; an unknown `protocol_version` logs one warning.
 - You can register callbacks with `ws.on("trade.new", handler)` instead of iterating.
 
@@ -416,11 +434,9 @@ async with cws.WebSocketClient(rest=cexy.AsyncClient(api_key="...", api_secret="
   `futures.account` the server's poller has stopped, so the client also unsubscribes and
   subscribes again by itself; if that subscribe is refused (e.g. `NOT_FOUND` "No futures
   account") the channel is dropped and a `subscribe_refused` event reports it.
-- Each futures channel is subscribed in a request of its own. A refusal (`RATE_LIMITED`,
-  `NOT_FOUND`, `VALIDATION_FAILED`, `SERVICE_UNAVAILABLE`) does not raise: it is listed in
-  `res.refused` and `res.errors` and emitted as `subscribe_refused`. It is **not retried
-  automatically**; WebSocket errors carry no retry hint, so wait (about 60 s after
-  `RATE_LIMITED`) before trying again.
+- Refusals (`RATE_LIMITED`, `NOT_FOUND`, `VALIDATION_FAILED`, `SERVICE_UNAVAILABLE`) follow the
+  subscribe-refusal rules above: listed in `res.refused` / `res.errors`, emitted as
+  `subscribe_refused`, **not retried automatically**.
 - `ping_interval` may be at most 60 s (default 30 s).
 
 ### Request signing

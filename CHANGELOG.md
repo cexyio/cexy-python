@@ -32,14 +32,31 @@ request signing (HMAC) ships; see "Versioning" in README.md.
 - `futures.resync` emits the event plus `resync` (`{"reason": "futures_resync", "channel": ...}`);
   on `futures.account` the client also unsubscribes and subscribes again (the server's poller
   stopped). A refusal of that subscribe drops the channel and is reported.
-- Each futures channel is subscribed in a request of its own (the server sends error frames before
-  a single `subscribed` ack, or no ack when nothing was accepted). A server refusal of a futures
-  channel does not raise: it is reported in `SubscribeResult.refused` / `.errors` and as a
-  `subscribe_refused` event, and is never retried automatically (WebSocket errors carry no retry
-  hint).
+- `SubscribeResult.errors` (refused channel -> server error) and `.held`, the
+  `subscribe_refused` event, `SubscribeRefusedError` and `WebSocketClient.pending_channels`.
 - Generated models for the futures schemas (`PerpMarket`, `Fill`, `Funding`, `Position`, ...).
 
+### Fixed
+- **WebSocket subscribe refusals, every channel (spot and futures).** The server answers a
+  partly refused `subscribe` with an `error` frame per refused channel (carrying the request id)
+  BEFORE the single `subscribed` ack, and with no ack when nothing was accepted. The client used
+  to fail the whole request on the first error frame and ignore the ack, so accepted channels
+  were not recorded. It now collects the errors and completes on the ack, once every channel has
+  been refused, or on a timeout after at least one error (all refused). `subscribe()` returns the
+  accepted channels plus the refused ones with their errors (`refused`, `errors`; also a
+  `subscribe_refused` event) and raises `SubscribeRefusedError` only when every channel sent was
+  refused (`TIMEOUT`/`DISCONNECTED` when no error arrived). Errors pair with the channels missing
+  from the ack in sent order (spot names case-insensitively, futures names exactly; the last error
+  covers any rest). Refused channels are not held and not retried. A batch is still sent as one
+  frame.
+- **Re-subscribes after a reconnect or a re-auth:** every refusal is reported (`subscribe_refused`);
+  a private channel refused `UNAUTHENTICATED` goes back to pending (subscribed after the next
+  successful auth) and any other refusal drops the channel, instead of putting every channel back to pending (re-auth) or failing
+  the whole restore (reconnect).
+
 ### Changed
+- A WebSocket `subscribe` that gets no ack and no error within `request_timeout` still raises
+  `TIMEOUT`, but its channels now stay held, so a reconnect sends them again.
 - `WebSocketClient(ping_interval=...)` must be at most 60 s (the server closes a connection whose
   client has been silent for 90-120 s); a larger value raises `ValueError`.
 

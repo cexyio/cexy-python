@@ -35,6 +35,9 @@ class FuturesServer:
         self.received: List[Dict[str, Any]] = []
         self.script: Dict[Tuple[str, int], List[Dict[str, Any]]] = {}
         self.counts: Dict[str, int] = collections.defaultdict(int)
+        # channel -> error code: refused like the server does (an error frame each, in order,
+        # then one `subscribed` ack for the rest, or no ack when nothing was accepted)
+        self.refuse: Dict[str, str] = {}
         self.conn: Any = None
         self.port = 0
 
@@ -52,7 +55,15 @@ class FuturesServer:
                 for frame in scripted:
                     await conn.send(json.dumps({**frame, "id": rid}))
             elif op == "subscribe":
-                await conn.send(json.dumps({"type": "subscribed", "channels": msg["channels"], "id": rid}))
+                accepted = []
+                for ch in msg["channels"]:
+                    if ch in self.refuse:
+                        err = {"type": "error", "code": self.refuse[ch], "message": f"refused {ch}", "id": rid}
+                        await conn.send(json.dumps(err))
+                    else:
+                        accepted.append(ch)
+                if accepted:
+                    await conn.send(json.dumps({"type": "subscribed", "channels": accepted, "id": rid}))
             elif op == "unsubscribe":
                 await conn.send(json.dumps({"type": "unsubscribed", "channels": msg["channels"], "id": rid}))
             elif op == "ping":
@@ -211,7 +222,10 @@ async def test_scenarios(server: FuturesServer, case: Dict[str, Any]) -> None:
                 await ws.auth_key()
                 sent_before = len(server.requests())
             elif step.get("client") == "subscribe":
-                results.append(await ws.subscribe(*step["channels"]))
+                try:
+                    results.append(await ws.subscribe(*step["channels"]))
+                except cws.SubscribeRefusedError as exc:  # every channel sent was refused
+                    results.append(exc.result)
                 sent_before = len(server.requests())
             elif "server" in step and step["server"]["type"] not in ACK_OP:
                 await server.push(step["server"])
@@ -256,10 +270,8 @@ async def test_held_account_channel_subscribes_after_auth(server: FuturesServer)
 
 
 async def test_partly_refused_multi_channel_subscribe(server: FuturesServer) -> None:
-    # One futures channel per request: a refusal (an error frame and no ack) never hides the
-    # channels the server accepted.
-    refusal = {"type": "error", "code": "NOT_FOUND", "message": "Futures market not found"}
-    server.script[("subscribe", 3)] = [refusal]
+    # One frame; the error frames for the refused channels come before the single ack.
+    server.refuse = {"futures.trades:btc": "NOT_FOUND"}
     async with make(server) as ws:
         res = await ws.subscribe("ticker:BTC/USDT", "futures.mids", "futures.orderbook:BTC", "futures.trades:btc")
         assert res.added == ["ticker:BTC/USDT", "futures.mids", "futures.orderbook:BTC"]
@@ -268,7 +280,7 @@ async def test_partly_refused_multi_channel_subscribe(server: FuturesServer) -> 
         refused = [e for e in await drain(ws) if e.type == cws.SUBSCRIBE_REFUSED]
         assert [(e.channel, e.data["code"]) for e in refused] == [("futures.trades:btc", "NOT_FOUND")]
     subs = [m["channels"] for m in server.requests() if m["op"] == "subscribe"]
-    assert subs == [["ticker:BTC/USDT"], ["futures.mids"], ["futures.orderbook:BTC"], ["futures.trades:btc"]]
+    assert subs == [["ticker:BTC/USDT", "futures.mids", "futures.orderbook:BTC", "futures.trades:btc"]]
 
 
 async def test_public_resync_on_mids(server: FuturesServer) -> None:
