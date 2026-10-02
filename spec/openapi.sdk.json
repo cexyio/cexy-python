@@ -986,6 +986,618 @@
         "security": []
       }
     },
+    "/api/v1/futures/fills": {
+      "get": {
+        "tags": [
+          "futures"
+        ],
+        "summary": "The caller's futures fills, newest first, 30 days back.",
+        "operationId": "fills",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page, as given; absent for the newest. A unix time in milliseconds is also accepted: rows older than it.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of fills",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/FuturesFillsResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many reads for this account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Could not be read right now (retryable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      }
+    },
+    "/api/v1/futures/funding": {
+      "get": {
+        "tags": [
+          "futures"
+        ],
+        "summary": "The caller's futures funding payments, newest first, 30 days back.",
+        "operationId": "funding",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page, as given; absent for the newest. A unix time in milliseconds is also accepted: rows older than it.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of funding payments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/FuturesFundingResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many reads for this account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Could not be read right now (retryable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      }
+    },
+    "/api/v1/futures/markets": {
+      "get": {
+        "tags": [
+          "futures"
+        ],
+        "summary": "Every listed futures market, with its current figures.",
+        "description": "Public. Read from the futures provider at most every few seconds for everyone; `stale` says when what is served is older than it should be.",
+        "operationId": "markets",
+        "responses": {
+          "200": {
+            "description": "The markets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/FuturesMarketsResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Futures market data cannot be read right now (retryable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scope": "-",
+        "security": []
+      }
+    },
+    "/api/v1/futures/markets/{coin}": {
+      "get": {
+        "tags": [
+          "futures"
+        ],
+        "summary": "One futures market.",
+        "operationId": "market",
+        "parameters": [
+          {
+            "name": "coin",
+            "in": "path",
+            "description": "The market's coin, e.g. `BTC`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The market",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/FuturesMarketResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such futures market",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Futures market data cannot be read right now (retryable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scope": "-",
+        "security": []
+      }
+    },
+    "/api/v1/futures/markets/{coin}/candles": {
+      "get": {
+        "tags": [
+          "futures"
+        ],
+        "summary": "A futures market's candles, 500 at a time in fixed windows.",
+        "operationId": "candles",
+        "parameters": [
+          {
+            "name": "coin",
+            "in": "path",
+            "description": "The market's coin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "interval",
+            "in": "query",
+            "description": "`1m`, `5m`, `15m`, `1h`, `4h` or `1d`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Unix milliseconds: the window of 500 candles holding this time. Absent: the latest 500.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "nullable": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The candles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/FuturesCandlesResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An interval or time not served",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such futures market",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many futures data requests from this address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The candles could not be read right now (retryable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scope": "-",
+        "security": []
+      }
+    },
+    "/api/v1/futures/markets/{coin}/orderbook": {
+      "get": {
+        "tags": [
+          "futures"
+        ],
+        "summary": "A futures market's book.",
+        "description": "From the live feed: the first request for a market opens it, and it stays open a minute after the last reader. `stale` is the feed's health, not the book's age; a quiet book can be unchanged and current.",
+        "operationId": "orderbook",
+        "parameters": [
+          {
+            "name": "coin",
+            "in": "path",
+            "description": "The market's coin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "depth",
+            "in": "query",
+            "description": "Levels per side, 1 to 20 (default 20).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The book",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/FuturesBookResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such futures market",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many new market feeds from this address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The book could not be read right now (retryable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scope": "-",
+        "security": []
+      }
+    },
+    "/api/v1/futures/markets/{coin}/trades": {
+      "get": {
+        "tags": [
+          "futures"
+        ],
+        "summary": "A futures market's recent public trades: side, price, size and time only.",
+        "description": "From the live feed's last 100. The first request for a market opens the feed, so it may return few or none, marked `stale`.",
+        "operationId": "trades",
+        "parameters": [
+          {
+            "name": "coin",
+            "in": "path",
+            "description": "The market's coin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "1 to 100 (default 50).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The trades",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/FuturesTradesResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such futures market",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many new market feeds from this address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scope": "-",
+        "security": []
+      }
+    },
+    "/api/v1/futures/orders": {
+      "get": {
+        "tags": [
+          "futures"
+        ],
+        "summary": "The caller's open futures orders.",
+        "operationId": "open_orders",
+        "responses": {
+          "200": {
+            "description": "Open orders",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/FuturesOpenOrdersResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many reads for this account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Could not be read right now (retryable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      }
+    },
+    "/api/v1/futures/positions": {
+      "get": {
+        "tags": [
+          "futures"
+        ],
+        "summary": "The caller's futures margin summary and open positions.",
+        "operationId": "positions",
+        "responses": {
+          "200": {
+            "description": "Positions, or `has_account: false`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/FuturesPositionsResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many reads for this account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Could not be read right now (retryable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_secret": []
+          }
+        ],
+        "x-required-scope": "read"
+      }
+    },
     "/api/v1/markets": {
       "get": {
         "tags": [
@@ -3151,6 +3763,53 @@
           }
         }
       },
+      "Candle": {
+        "type": "object",
+        "description": "One candle.",
+        "required": [
+          "open_time",
+          "close_time",
+          "open",
+          "high",
+          "low",
+          "close",
+          "volume",
+          "trades"
+        ],
+        "properties": {
+          "close": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "close_time": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Close time, unix milliseconds."
+          },
+          "high": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "low": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "open": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "open_time": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Open time, unix milliseconds."
+          },
+          "trades": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of trades.",
+            "minimum": 0
+          },
+          "volume": {
+            "$ref": "#/components/schemas/Amount"
+          }
+        }
+      },
       "CandleInterval": {
         "type": "string",
         "description": "Candle/kline intervals for market data.",
@@ -3659,6 +4318,62 @@
           }
         }
       },
+      "Fill": {
+        "type": "object",
+        "description": "One fill.",
+        "required": [
+          "id",
+          "order_id",
+          "coin",
+          "side",
+          "price",
+          "size",
+          "direction",
+          "closed_pnl",
+          "taker",
+          "time"
+        ],
+        "properties": {
+          "closed_pnl": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "coin": {
+            "type": "string",
+            "description": "Coin."
+          },
+          "direction": {
+            "type": "string",
+            "description": "The provider's description of the fill's effect (`Open Long`, `Close Short`, ...)."
+          },
+          "id": {
+            "type": "string",
+            "description": "Our id for it."
+          },
+          "order_id": {
+            "type": "string",
+            "description": "Our id for its order."
+          },
+          "price": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "side": {
+            "type": "string",
+            "description": "`buy` or `sell`."
+          },
+          "size": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "taker": {
+            "type": "boolean",
+            "description": "Whether this fill took liquidity."
+          },
+          "time": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When, unix milliseconds."
+          }
+        }
+      },
       "FillResponse": {
         "type": "object",
         "description": "One of the caller's executions.",
@@ -3714,6 +4429,306 @@
           "trade_id": {
             "type": "string",
             "description": "Trade id."
+          }
+        }
+      },
+      "Funding": {
+        "type": "object",
+        "description": "One funding payment.",
+        "required": [
+          "coin",
+          "amount",
+          "position_size",
+          "rate",
+          "time"
+        ],
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "coin": {
+            "type": "string",
+            "description": "Coin."
+          },
+          "position_size": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "rate": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "time": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When, unix milliseconds."
+          }
+        }
+      },
+      "FuturesBookResponse": {
+        "type": "object",
+        "description": "A futures market's book.",
+        "required": [
+          "coin",
+          "bids",
+          "asks",
+          "as_of",
+          "stale"
+        ],
+        "properties": {
+          "as_of": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the provider last sent it."
+          },
+          "asks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Level"
+            },
+            "description": "Asks, best first."
+          },
+          "bids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Level"
+            },
+            "description": "Bids, best first."
+          },
+          "coin": {
+            "type": "string",
+            "description": "Coin."
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "The live feed is not healthy: the book may be out of date."
+          }
+        }
+      },
+      "FuturesCandlesResponse": {
+        "type": "object",
+        "description": "A futures market's candles.",
+        "required": [
+          "coin",
+          "interval",
+          "candles",
+          "as_of",
+          "stale"
+        ],
+        "properties": {
+          "as_of": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When read."
+          },
+          "candles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Candle"
+            },
+            "description": "Candles, oldest first."
+          },
+          "coin": {
+            "type": "string",
+            "description": "Coin."
+          },
+          "interval": {
+            "type": "string",
+            "description": "Interval."
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "Older than it should be."
+          }
+        }
+      },
+      "FuturesFillsResponse": {
+        "type": "object",
+        "description": "A page of the account's fills.",
+        "required": [
+          "has_account",
+          "fills"
+        ],
+        "properties": {
+          "fills": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Fill"
+            },
+            "description": "Newest first; fills sharing a millisecond in a fixed order. A page may be short of 100 and still be followed by more."
+          },
+          "has_account": {
+            "type": "boolean",
+            "description": "Whether the account has a futures account."
+          },
+          "next_cursor": {
+            "type": "string",
+            "description": "Pass as `cursor` for older fills, exactly as given; `null` at the end (30 days back). Opaque: it may carry more than a time.",
+            "nullable": true
+          }
+        }
+      },
+      "FuturesFundingResponse": {
+        "type": "object",
+        "description": "A page of the account's funding payments.",
+        "required": [
+          "has_account",
+          "funding"
+        ],
+        "properties": {
+          "funding": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Funding"
+            },
+            "description": "Newest first."
+          },
+          "has_account": {
+            "type": "boolean",
+            "description": "Whether the account has a futures account."
+          },
+          "next_cursor": {
+            "type": "string",
+            "description": "Pass as `cursor` for older payments, exactly as given; `null` at the end (30 days back). Opaque.",
+            "nullable": true
+          }
+        }
+      },
+      "FuturesMarketResponse": {
+        "type": "object",
+        "description": "One futures market.",
+        "required": [
+          "market",
+          "as_of",
+          "stale"
+        ],
+        "properties": {
+          "as_of": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this data was read."
+          },
+          "market": {
+            "$ref": "#/components/schemas/PerpMarket"
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "Older than it should be."
+          }
+        }
+      },
+      "FuturesMarketsResponse": {
+        "type": "object",
+        "description": "Every listed futures market.",
+        "required": [
+          "markets",
+          "as_of",
+          "stale"
+        ],
+        "properties": {
+          "as_of": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this data was read from the futures provider."
+          },
+          "markets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PerpMarket"
+            },
+            "description": "The markets, in the provider's order. Delisted markets are not included."
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "The data is older than it should be: the provider could not be read just now."
+          }
+        }
+      },
+      "FuturesOpenOrdersResponse": {
+        "type": "object",
+        "description": "The account's open orders.",
+        "required": [
+          "has_account",
+          "orders",
+          "stale"
+        ],
+        "properties": {
+          "as_of": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When read.",
+            "nullable": true
+          },
+          "has_account": {
+            "type": "boolean",
+            "description": "Whether the account has a futures account."
+          },
+          "orders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OpenOrder"
+            },
+            "description": "The open orders."
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "Older than it should be."
+          }
+        }
+      },
+      "FuturesPositionsResponse": {
+        "type": "object",
+        "description": "The account's positions.",
+        "required": [
+          "has_account",
+          "stale"
+        ],
+        "properties": {
+          "as_of": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When read.",
+            "nullable": true
+          },
+          "has_account": {
+            "type": "boolean",
+            "description": "Whether the account has a futures account. Without one, nothing else is meaningful."
+          },
+          "positions": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Positions"
+              }
+            ],
+            "nullable": true
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "Older than it should be."
+          }
+        }
+      },
+      "FuturesTradesResponse": {
+        "type": "object",
+        "description": "A futures market's recent public trades.",
+        "required": [
+          "coin",
+          "trades",
+          "stale"
+        ],
+        "properties": {
+          "coin": {
+            "type": "string",
+            "description": "Coin."
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "The live feed is not healthy, or was only just opened: trades may be missing."
+          },
+          "trades": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicTrade"
+            },
+            "description": "Newest first."
           }
         }
       },
@@ -4080,6 +5095,22 @@
           "propertyName": "type"
         }
       },
+      "Level": {
+        "type": "object",
+        "description": "One price level.",
+        "required": [
+          "price",
+          "size"
+        ],
+        "properties": {
+          "price": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "size": {
+            "$ref": "#/components/schemas/Amount"
+          }
+        }
+      },
       "LiquidityRole": {
         "type": "string",
         "description": "Whether a fill added liquidity (maker) or removed it (taker).",
@@ -4368,6 +5399,65 @@
           }
         }
       },
+      "OpenOrder": {
+        "type": "object",
+        "description": "One open order.",
+        "required": [
+          "id",
+          "coin",
+          "side",
+          "price",
+          "size",
+          "original_size",
+          "placed_at",
+          "reduce_only",
+          "order_type"
+        ],
+        "properties": {
+          "coin": {
+            "type": "string",
+            "description": "Coin."
+          },
+          "id": {
+            "type": "string",
+            "description": "Our id for it, stable across reads."
+          },
+          "order_type": {
+            "type": "string",
+            "description": "The order type as the provider names it (`Limit`, `Stop Market`, ...)."
+          },
+          "original_size": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "placed_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When placed, unix milliseconds."
+          },
+          "price": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "reduce_only": {
+            "type": "boolean",
+            "description": "Whether it may only reduce a position."
+          },
+          "side": {
+            "type": "string",
+            "description": "`buy` or `sell`."
+          },
+          "size": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "trigger_price": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Amount"
+              }
+            ],
+            "nullable": true
+          }
+        }
+      },
       "OrderBookResponse": {
         "type": "object",
         "description": "One side of the order book, aggregated by price.",
@@ -4623,6 +5713,65 @@
           }
         }
       },
+      "PerpMarket": {
+        "type": "object",
+        "description": "One listed perpetual market and its current figures.",
+        "required": [
+          "coin",
+          "size_decimals",
+          "max_leverage",
+          "mark_price",
+          "oracle_price",
+          "funding_rate",
+          "open_interest",
+          "volume_24h",
+          "price_24h_ago"
+        ],
+        "properties": {
+          "coin": {
+            "type": "string",
+            "description": "The provider's coin name, e.g. `BTC` or `kPEPE`."
+          },
+          "funding_rate": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "mark_price": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "max_leverage": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The highest leverage allowed.",
+            "minimum": 0
+          },
+          "mid_price": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Amount"
+              }
+            ],
+            "nullable": true
+          },
+          "open_interest": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "oracle_price": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "price_24h_ago": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "size_decimals": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Decimal places a size may have.",
+            "minimum": 0
+          },
+          "volume_24h": {
+            "$ref": "#/components/schemas/Amount"
+          }
+        }
+      },
       "PlaceOrderRequest": {
         "type": "object",
         "description": "Places an order.\n\nSet `client_order_id` to make a retry safe: it is unique per account, so a repeat is refused before any funds move, and `GET /trading/orders/by-client-id/{client_order_id}` recovers the outcome. `Idempotency-Key` is not honoured for orders.",
@@ -4795,6 +5944,130 @@
           "paused",
           "closing"
         ]
+      },
+      "Position": {
+        "type": "object",
+        "description": "One open position.",
+        "required": [
+          "coin",
+          "size",
+          "position_value",
+          "unrealized_pnl",
+          "return_on_equity",
+          "leverage_type",
+          "leverage",
+          "margin_used",
+          "funding_since_open"
+        ],
+        "properties": {
+          "coin": {
+            "type": "string",
+            "description": "Coin."
+          },
+          "entry_price": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Amount"
+              }
+            ],
+            "nullable": true
+          },
+          "funding_since_open": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "leverage": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Leverage.",
+            "minimum": 0
+          },
+          "leverage_type": {
+            "type": "string",
+            "description": "`cross` or `isolated`."
+          },
+          "liquidation_price": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Amount"
+              }
+            ],
+            "nullable": true
+          },
+          "margin_used": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "position_value": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "return_on_equity": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "size": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "unrealized_pnl": {
+            "$ref": "#/components/schemas/Amount"
+          }
+        }
+      },
+      "Positions": {
+        "type": "object",
+        "description": "A margin summary and the open positions.",
+        "required": [
+          "account_value",
+          "total_notional",
+          "margin_used",
+          "maintenance_margin",
+          "positions"
+        ],
+        "properties": {
+          "account_value": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "maintenance_margin": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "margin_used": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "positions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Position"
+            },
+            "description": "The open positions."
+          },
+          "total_notional": {
+            "$ref": "#/components/schemas/Amount"
+          }
+        }
+      },
+      "PublicTrade": {
+        "type": "object",
+        "description": "A public trade, with nothing that identifies the parties.",
+        "required": [
+          "side",
+          "price",
+          "size",
+          "time"
+        ],
+        "properties": {
+          "price": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "side": {
+            "type": "string",
+            "description": "`buy` or `sell`: the taker's side."
+          },
+          "size": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "time": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When, unix milliseconds."
+          }
+        }
       },
       "PublicTradeResponse": {
         "type": "object",
@@ -5136,13 +6409,7 @@
         "type": "apiKey",
         "in": "header",
         "name": "X-API-Key",
-        "description": "Identifies the key. Sent with `X-API-Secret`, which authenticates it \u2014 both headers are required. Create one at `/account/api-keys`; the secret is shown once and never again. A key can read and trade. It can never withdraw or transfer, whatever its scopes, because those need a recently verified two-factor code and a program cannot produce one."
-      },
-      "api_secret": {
-        "type": "apiKey",
-        "in": "header",
-        "name": "X-API-Secret",
-        "description": "Deprecated: sign requests instead (`X-API-Timestamp`, `X-API-Nonce`, `X-API-Signature`; see the request-signing guide). Authenticates the key identified by `X-API-Key` by sending its secret; responses to this mode carry `Deprecation: true`. Never sent in a query string."
+        "description": "Identifies the key. Sent with `X-API-Timestamp`, `X-API-Nonce` and `X-API-Signature`, which authenticate it: all four are required, and the secret itself is never sent (a request carrying `X-API-Secret` is refused with `SIGNATURE_REQUIRED`). Create one in the account's security settings (cexy.io/account/security/api-keys, or `POST /api/v1/account/api-keys` with a session); the secret is shown once and never again. A key can read and trade. It can never withdraw or transfer, whatever its scopes, because those need a recently verified two-factor code and a program cannot produce one."
       }
     }
   }

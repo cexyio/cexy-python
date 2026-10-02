@@ -1,0 +1,274 @@
+{
+  "description": "Futures account history paging (GET /api/v1/futures/fills and /api/v1/futures/funding), for an SDK's iterate-all helper. Rules: (1) the cursor is opaque text, sent back exactly as received (percent-encoded per RFC 3986 in the query; the server decodes it to the same text); (2) a page may be short, even empty, and still carry a next_cursor: keep paging until next_cursor is null; (3) an EMPTY page whose next_cursor equals the cursor just sent means the provider is busy: wait (the SDK's normal backoff) and request the same cursor again, at most max_retries times (default 3) in a row, then fail with a retryable error (code PAGING_STALLED, a local error) without returning a partial result as complete; (4) has_account false ends iteration with no rows; (5) the first request sends no cursor. Each case lists the pages in order: `request_cursor` is what the SDK must send (null = parameter absent), `response` what the server answers. `expect.ids` are the yielded row ids in order.",
+  "operation": "GET /api/v1/futures/fills",
+  "max_retries": 3,
+  "cases": [
+    {
+      "id": "short_pages_until_null",
+      "pages": [
+        {
+          "request_cursor": null,
+          "response": {
+            "has_account": true,
+            "fills": [
+              {
+                "id": "f1",
+                "order_id": "o1",
+                "coin": "BTC",
+                "side": "buy",
+                "price": "60000.0",
+                "size": "0.01",
+                "direction": "Open Long",
+                "closed_pnl": "0",
+                "taker": true,
+                "time": 1790000000300
+              }
+            ],
+            "next_cursor": "c:AAA1"
+          }
+        },
+        {
+          "request_cursor": "c:AAA1",
+          "response": {
+            "has_account": true,
+            "fills": [],
+            "next_cursor": "c:AAA2"
+          }
+        },
+        {
+          "request_cursor": "c:AAA2",
+          "response": {
+            "has_account": true,
+            "fills": [
+              {
+                "id": "f2",
+                "order_id": "o2",
+                "coin": "BTC",
+                "side": "buy",
+                "price": "60000.0",
+                "size": "0.01",
+                "direction": "Open Long",
+                "closed_pnl": "0",
+                "taker": true,
+                "time": 1790000000200
+              },
+              {
+                "id": "f3",
+                "order_id": "o3",
+                "coin": "BTC",
+                "side": "buy",
+                "price": "60000.0",
+                "size": "0.01",
+                "direction": "Open Long",
+                "closed_pnl": "0",
+                "taker": true,
+                "time": 1790000000100
+              }
+            ],
+            "next_cursor": null
+          }
+        }
+      ],
+      "expect": {
+        "ids": [
+          "f1",
+          "f2",
+          "f3"
+        ],
+        "requests": 3,
+        "sleeps": 0
+      }
+    },
+    {
+      "id": "cursor_sent_back_verbatim",
+      "pages": [
+        {
+          "request_cursor": null,
+          "response": {
+            "has_account": true,
+            "fills": [
+              {
+                "id": "f1",
+                "order_id": "o1",
+                "coin": "BTC",
+                "side": "buy",
+                "price": "60000.0",
+                "size": "0.01",
+                "direction": "Open Long",
+                "closed_pnl": "0",
+                "taker": true,
+                "time": 1790000000300
+              }
+            ],
+            "next_cursor": "1790000000300:a/b+c=d e~"
+          }
+        },
+        {
+          "request_cursor": "1790000000300:a/b+c=d e~",
+          "response": {
+            "has_account": true,
+            "fills": [],
+            "next_cursor": null
+          }
+        }
+      ],
+      "expect": {
+        "ids": [
+          "f1"
+        ],
+        "requests": 2,
+        "sleeps": 0,
+        "encoded_query_of_request_2": "cursor=1790000000300%3Aa%2Fb%2Bc%3Dd%20e~"
+      }
+    },
+    {
+      "id": "busy_provider_same_cursor_retried",
+      "pages": [
+        {
+          "request_cursor": null,
+          "response": {
+            "has_account": true,
+            "fills": [
+              {
+                "id": "f1",
+                "order_id": "o1",
+                "coin": "BTC",
+                "side": "buy",
+                "price": "60000.0",
+                "size": "0.01",
+                "direction": "Open Long",
+                "closed_pnl": "0",
+                "taker": true,
+                "time": 1790000000300
+              }
+            ],
+            "next_cursor": "c:B1"
+          }
+        },
+        {
+          "request_cursor": "c:B1",
+          "response": {
+            "has_account": true,
+            "fills": [],
+            "next_cursor": "c:B1"
+          }
+        },
+        {
+          "request_cursor": "c:B1",
+          "response": {
+            "has_account": true,
+            "fills": [
+              {
+                "id": "f2",
+                "order_id": "o2",
+                "coin": "BTC",
+                "side": "buy",
+                "price": "60000.0",
+                "size": "0.01",
+                "direction": "Open Long",
+                "closed_pnl": "0",
+                "taker": true,
+                "time": 1790000000200
+              }
+            ],
+            "next_cursor": null
+          }
+        }
+      ],
+      "expect": {
+        "ids": [
+          "f1",
+          "f2"
+        ],
+        "requests": 3,
+        "sleeps": 1
+      }
+    },
+    {
+      "id": "busy_provider_gives_up_after_max_retries",
+      "pages": [
+        {
+          "request_cursor": null,
+          "response": {
+            "has_account": true,
+            "fills": [
+              {
+                "id": "f1",
+                "order_id": "o1",
+                "coin": "BTC",
+                "side": "buy",
+                "price": "60000.0",
+                "size": "0.01",
+                "direction": "Open Long",
+                "closed_pnl": "0",
+                "taker": true,
+                "time": 1790000000300
+              }
+            ],
+            "next_cursor": "c:S1"
+          }
+        },
+        {
+          "request_cursor": "c:S1",
+          "response": {
+            "has_account": true,
+            "fills": [],
+            "next_cursor": "c:S1"
+          }
+        },
+        {
+          "request_cursor": "c:S1",
+          "response": {
+            "has_account": true,
+            "fills": [],
+            "next_cursor": "c:S1"
+          }
+        },
+        {
+          "request_cursor": "c:S1",
+          "response": {
+            "has_account": true,
+            "fills": [],
+            "next_cursor": "c:S1"
+          }
+        },
+        {
+          "request_cursor": "c:S1",
+          "response": {
+            "has_account": true,
+            "fills": [],
+            "next_cursor": "c:S1"
+          }
+        }
+      ],
+      "expect": {
+        "ids_before_error": [
+          "f1"
+        ],
+        "requests": 5,
+        "sleeps": 3,
+        "error_code": "PAGING_STALLED",
+        "error_retryable": true
+      }
+    },
+    {
+      "id": "no_futures_account",
+      "pages": [
+        {
+          "request_cursor": null,
+          "response": {
+            "has_account": false,
+            "fills": [],
+            "next_cursor": null
+          }
+        }
+      ],
+      "expect": {
+        "ids": [],
+        "requests": 1,
+        "sleeps": 0,
+        "has_account": false
+      }
+    }
+  ]
+}

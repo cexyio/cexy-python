@@ -120,6 +120,17 @@ class ServerError(CexyApiError):
     """5xx: server-side failure, maintenance or overload."""
 
 
+class PagingStalledError(CexyApiError):
+    """``PAGING_STALLED``: a local error, never sent by the server. A history iterator
+    (``client.futures.iter_fills`` / ``iter_funding``) got the same empty page back more than
+    ``max_retries`` times in a row because the provider stayed busy. Retryable: start the
+    iteration again later. The rows already yielded are not the complete history.
+    ``status`` is that of the last response (200); ``details["retries"]`` is the waits taken."""
+
+    def __init__(self, message: str, *, retries: int) -> None:
+        super().__init__("PAGING_STALLED", message, status=200, details={"retries": retries}, retryable=True)
+
+
 _BY_CODE: Dict[str, Type[CexyApiError]] = {}
 for _cls, _codes in {
     ValidationError: (

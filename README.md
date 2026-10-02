@@ -8,7 +8,7 @@ Typed Python client for the [CEXY.io](https://cexy.io) exchange REST and WebSock
 - Client-side rate limiting, cursor pagination
 - WebSocket client with heartbeat, reconnect and a self-syncing order book
 
-> Status: **0.1.0.dev11, pre-release.** The API may change before 1.0 (see [Versioning](#versioning)).
+> Status: **0.1.0.dev12, pre-release.** The API may change before 1.0 (see [Versioning](#versioning)).
 > Pre-releases need `--pre`: `pip install --pre cexy`.
 
 ## Install
@@ -174,6 +174,7 @@ message.
 | `UnprocessableError` | 422, e.g. `INSUFFICIENT_FUNDS`, `MARKET_UNAVAILABLE` |
 | `RateLimitError` | 429; `.retry_after` gives the server's requested wait |
 | `ServerError` | 5xx, e.g. `UNDER_MAINTENANCE`, `ENGINE_OVERLOADED` |
+| `PagingStalledError` | local, `PAGING_STALLED`: a futures history iterator gave up on a busy provider (retryable) |
 
 An error code this SDK version does not know is raised as the base `CexyApiError`: it never
 crashes the client. Network failures after retries raise `CexyConnectionError`. Calling a
@@ -231,6 +232,56 @@ next_page = page.next_page()               # None on the last page
 ```
 
 With `AsyncClient`: `async for order in page.auto_paging_iter(): ...`.
+
+## Futures data (read only)
+
+`client.futures` reads futures market data and the account's own futures data. Nothing here
+places or changes anything.
+
+**Public market data** (no key needed):
+
+```python
+markets = client.futures.markets()                 # every listed market and its figures
+btc = client.futures.market("BTC").market
+book = client.futures.order_book("BTC", depth=10)  # up to 20 levels a side
+candles = client.futures.candles("BTC", "1h")      # 500 candles; before=<epoch ms> for older
+trades = client.futures.trades("BTC", limit=50)    # at most 100, side/price/size/time only
+```
+
+**Account data** needs a key with the `read` scope (requests are signed like every private
+call):
+
+```python
+client = cexy.Client(api_key="...", api_secret="...")
+pos = client.futures.positions()      # margin summary and open positions
+orders = client.futures.open_orders()
+for fill in client.futures.iter_fills():        # every fill, newest first, 30 days back
+    print(fill.id, fill.coin, fill.side, fill.price, fill.size)
+for payment in client.futures.iter_funding():   # every funding payment
+    print(payment.coin, payment.amount)
+```
+
+- Every response carries `as_of` (when the data arrived) and `stale`. For books and trades
+  `stale` is the live feed's health, not the data's age: a quiet book can be unchanged and
+  current.
+- Without a futures account the account reads answer `has_account=False` (no error);
+  `iter_fills()`/`iter_funding()` then yield nothing.
+- Prices and sizes are `Decimal`.
+- `fills(cursor=...)` and `funding(cursor=...)` return one page (`has_account`, the rows,
+  `next_cursor`). Paging rules, which `iter_fills()`/`iter_funding()` follow for you: the first
+  request sends no cursor; the cursor is opaque text, sent back exactly as given; a page can be
+  short, even empty, and still have a `next_cursor`, so keep going until it is `None`. An
+  empty page whose `next_cursor` equals the cursor just sent means the provider is busy: the
+  iterator waits (the normal retry backoff) and asks for the same cursor again, up to
+  `max_retries` times in a row (default 3), then raises `PagingStalledError` (code
+  `PAGING_STALLED`, a local error, retryable). The rows already yielded are then not the
+  complete history: start again later.
+- When nothing usable is cached and the provider cannot be read, the server answers 503
+  `SERVICE_UNAVAILABLE` with `details["reason"] == "futures_data_unavailable"` and a
+  `Retry-After` (1 to 30 s). It is retryable: the client retries it like any 503 and then
+  raises `ServerError`.
+
+With `AsyncClient` every method is awaited, and the iterators are `async for`.
 
 ## Rate limits
 

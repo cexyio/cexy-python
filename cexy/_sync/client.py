@@ -26,6 +26,7 @@ from cexy._sync.resources import (
     Assets,
     Exports,
     Fees,
+    Futures,
     Markets,
     Networks,
     Pools,
@@ -110,6 +111,7 @@ class Client:
         self.exports = Exports(self._transport)
         self.wallet = Wallet(self._transport)
         self.trading = Trading(self._transport)
+        self.futures = Futures(self._transport)
 
     @property
     def base_url(self) -> str:

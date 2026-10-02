@@ -15,6 +15,7 @@ from cexy._async.resources import (
     AsyncAssets,
     AsyncExports,
     AsyncFees,
+    AsyncFutures,
     AsyncMarkets,
     AsyncNetworks,
     AsyncPools,
@@ -108,6 +109,7 @@ class AsyncClient:
         self.exports = AsyncExports(self._transport)
         self.wallet = AsyncWallet(self._transport)
         self.trading = AsyncTrading(self._transport)
+        self.futures = AsyncFutures(self._transport)
 
     @property
     def base_url(self) -> str:

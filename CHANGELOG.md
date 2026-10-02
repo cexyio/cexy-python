@@ -3,6 +3,22 @@
 All notable changes to this project are documented here. The SDK stays at 0.x until API
 request signing (HMAC) ships; see "Versioning" in README.md.
 
+## 0.1.0.dev12 (2026-10-02)
+
+### Added
+- **Futures data (read only)**, `client.futures` (sync and async), for the 9 futures operations
+  in cexy-api-spec `ea7180f`. Public: `markets()`, `market(coin)`, `order_book(coin, depth=)`,
+  `candles(coin, interval, before=)`, `trades(coin, limit=)`. Account (`read` key, signed):
+  `positions()`, `open_orders()`, `fills(cursor=)`, `funding(cursor=)`. Responses carry `as_of`
+  and `stale`; account reads answer `has_account=False` without a futures account.
+- `futures.iter_fills()` / `futures.iter_funding()`: every row across all pages, following
+  the shared conformance `futures/history_paging.json` (opaque cursor sent back verbatim, page
+  until `next_cursor` is null, an empty page repeating the cursor is a busy provider: back off
+  and retry the same cursor up to `max_retries`, default 3).
+- `PagingStalledError` (code `PAGING_STALLED`, local, retryable): raised when the provider stays
+  busy past `max_retries`.
+- Generated models for the futures schemas (`PerpMarket`, `Fill`, `Funding`, `Position`, ...).
+
 ## 0.1.0.dev11 (2026-10-01)
 
 ### Changed
