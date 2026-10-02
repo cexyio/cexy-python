@@ -401,16 +401,24 @@ class OrderBook:
 
 
 def _spot_key(name: str) -> str:
-    """A spot channel name as the server canonicalises it: case-insensitive, and ``_`` read as
-    ``/`` in the market symbol (``ticker:btc_usdt`` is acknowledged as ``ticker:BTC/USDT``)."""
+    """A spot channel name as the server canonicalises it: the whole name trimmed, the channel
+    kind kept exactly (``Ticker:BTC/USDT`` is refused, not matched), and the market symbol trimmed,
+    upper-cased and ``_`` read as ``/`` (``ticker:btc_usdt`` is acknowledged as ``ticker:BTC/USDT``)."""
     kind, sep, symbol = name.strip().partition(":")
-    return kind.casefold() + sep + symbol.replace("_", "/").casefold()
+    return kind + sep + symbol.strip().upper().replace("_", "/")
+
+
+def _channel_key(name: str) -> str:
+    """The name the server would hold ``name`` under: futures names exactly, spot names via
+    ``_spot_key``."""
+    return name if is_futures_channel(name) else _spot_key(name)
 
 
 def _unmatched(sent: List[str], accepted: List[str]) -> List[str]:
-    """The sent channels the ack does not list, in send order: the refused ones. Spot names are
-    compared the way the server canonicalises them (``_spot_key``); futures names are
-    case-sensitive and echoed as sent, so they are compared exactly."""
+    """The sent channels the ack does not list, in send order: the refused ones. The ack is
+    matched as a multiset (it can repeat a name); spot names are compared the way the server
+    canonicalises them (``_spot_key``); futures names are case-sensitive and echoed as sent, so
+    they are compared exactly."""
     left = list(sent)
     for name in accepted:
         match = next((s for s in left if s == name), None)
@@ -827,9 +835,13 @@ class WebSocketClient:
                 raise ValueError(f"invalid channel name {ch!r} (1-{MAX_CHANNEL_LENGTH} characters)")
             if is_futures_channel(ch):
                 _check_futures_channel(ch)
+        # Private channels waiting for the next successful auth count as held. Two spellings of
+        # one channel (``ticker:btc_usdt``, ``ticker:BTC/USDT``) are sent once.
+        seen = {_channel_key(c) for c in (*self._channels, *self._pending_private)}
         for ch in channels:
-            # Private channels waiting for the next successful auth count as held.
-            if ch not in self._channels and ch not in self._pending_private and ch not in wanted:
+            key = _channel_key(ch)
+            if key not in seen:
+                seen.add(key)
                 wanted.append(ch)
         room = max(0, self.max_subscriptions - len(self._channels) - len(self._pending_private))
         send, refused = wanted[:room], wanted[room:]
@@ -881,8 +893,11 @@ class WebSocketClient:
         if ack is not None and ack.get("type") != "subscribed":
             raise WebSocketError("PROTOCOL", f"expected 'subscribed' for subscribe, got {ack.get('type')!r}")
         listed = ack.get("channels") if ack is not None else []
-        accepted = [c for c in (listed if isinstance(listed, list) else channels) if isinstance(c, str)]
-        refused = _unmatched(channels, accepted)
+        acked = [c for c in (listed if isinstance(listed, list) else channels) if isinstance(c, str)]
+        # The ack can repeat a name (a channel already held, two spellings of one channel): match
+        # it as a multiset, report each accepted name once.
+        refused = _unmatched(channels, acked)
+        accepted = list(dict.fromkeys(acked))
         errors: Dict[str, WebSocketError] = {}
         for i, ch in enumerate(refused):
             # Errors come in channel order; channels past a "stop processing" refusal (the

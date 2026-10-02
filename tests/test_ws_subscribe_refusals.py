@@ -15,7 +15,7 @@ from websockets.asyncio.server import serve
 from cexy import ws as cws
 from cexy.ws import WebSocketClient
 from tests.conftest import load
-from tests.test_ws_futures import FuturesServer, drain, make, until
+from tests.test_ws_futures import NO_ID, FuturesServer, drain, make, until
 
 
 @pytest.fixture
@@ -111,6 +111,33 @@ async def test_canonical_names_in_the_ack_are_not_refusals(server: FuturesServer
         assert res.added == ["ticker:BTC/USDT"] and res.refused == [] and res.errors == {}
 
 
+async def test_channel_kind_is_matched_exactly(server: FuturesServer) -> None:
+    # Only the spot market symbol is canonicalised: Ticker:BTC/USDT is another (invalid) channel,
+    # sent on its own, and the ack's ticker:BTC/USDT belongs to ticker:btc_usdt.
+    err = {"type": "error", "code": "VALIDATION_FAILED", "message": "(any text)"}
+    server.script[("subscribe", 0)] = [err, {"type": "subscribed", "channels": ["ticker:BTC/USDT"]}]
+    async with make(server) as ws:
+        res = await ws.subscribe("Ticker:BTC/USDT", "ticker:btc_usdt")
+        assert res.added == ["ticker:BTC/USDT"]
+        assert {c: e.code for c, e in res.errors.items()} == {"Ticker:BTC/USDT": "VALIDATION_FAILED"}
+    assert subscribes(server) == [["Ticker:BTC/USDT", "ticker:btc_usdt"]]
+
+
+async def test_two_spellings_of_one_channel_are_sent_once(server: FuturesServer) -> None:
+    async with make(server) as ws:
+        res = await ws.subscribe("ticker:btc_usdt", "ticker:BTC/USDT", " ticker:btc/usdt ")
+        assert res.refused == [] and ws.channels == {"ticker:btc_usdt"}
+        res = await ws.subscribe("ticker:BTC/USDT")  # already held under another spelling
+        assert res.added == [] and res.refused == []
+    assert subscribes(server) == [["ticker:btc_usdt"]]
+
+
+def test_ack_names_match_as_a_multiset() -> None:
+    sent = ["ticker:btc_usdt", "ticker:BTC/USDT", "ticker:ETH/USDT"]
+    assert cws._unmatched(sent, ["ticker:BTC/USDT", "ticker:BTC/USDT"]) == ["ticker:ETH/USDT"]
+    assert cws._unmatched(["ticker:BTC/USDT"], ["ticker:BTC/USDT", "ticker:BTC/USDT"]) == []
+
+
 async def test_stop_processing_refusal_covers_the_rest(server: FuturesServer) -> None:
     # The 100-subscription refusal stops the frame: one error for several channels.
     limit = {"type": "error", "code": "RATE_LIMITED", "message": "at most 100 subscriptions"}
@@ -190,13 +217,24 @@ async def run_subscribe(ws: WebSocketClient, channels: List[str]) -> Tuple[Dict[
 
 
 def test_refusal_fixture_has_every_case() -> None:
-    assert len(REFUSALS["cases"]) == 7
+    assert len(REFUSALS["cases"]) == 11
     assert "error_for_other_request_not_misattributed" in {c["id"] for c in CONCURRENT}
+    assert {
+        "channel_kind_is_exact",
+        "same_channel_two_spellings_acked_twice",
+        "event_before_ack_is_delivered",
+        "idless_error_not_attributed",
+    } <= {c["id"] for c in SIMPLE}
+
+
+def scripted(frames: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Answers carry the request id; events carry none; a frame with an explicit ``id`` keeps it."""
+    return [f if "id" in f or f["type"] in ("error", "subscribed") else {**f, "id": NO_ID} for f in frames]
 
 
 @pytest.mark.parametrize("case", SIMPLE, ids=[c["id"] for c in SIMPLE])
 async def test_subscribe_refusals_conformance(server: FuturesServer, case: Dict[str, Any]) -> None:
-    server.script[("subscribe", 0)] = case["server"]
+    server.script[("subscribe", 0)] = scripted(case["server"])
     exp = case["expect"]
     async with make(server) as ws:
         loop = asyncio.get_running_loop()
@@ -209,15 +247,24 @@ async def test_subscribe_refusals_conformance(server: FuturesServer, case: Dict[
             assert sorted(ws.channels) == sorted(exp["held_after"])
             return
         got, failed = await run_subscribe(ws, case["send"])
-        assert got == {"added": exp["added"], "refused": exp["refused"]}
+        assert got["refused"] == exp["refused"]
+        if "added" in exp:
+            assert got["added"] == exp["added"]
         assert failed is exp["fails"]
         if exp.get("completes_before_timeout"):
             assert loop.time() - start < ws.request_timeout / 2
-        assert ws.channels == set(exp["added"])  # refused channels are not held
+        # refused channels are not held
+        assert ws.channels == set(exp.get("held_after", exp.get("added", [])))
         events = await drain(ws, 0.05)
         refused = {e.channel: e.data["code"] for e in events if e.type == cws.SUBSCRIBE_REFUSED}
         assert refused == exp["refused"]
-    assert len(subscribes(server)) == 1  # one frame, nothing retried
+        if "events_delivered" in exp:
+            delivered = [e.type for e in events if e.type in exp["events_delivered"]]
+            assert delivered == exp["events_delivered"]
+    sent = [m for m in server.requests() if m["op"] == "subscribe"]
+    assert len(sent) == 1  # one frame, nothing retried
+    if exp.get("request_has_id"):
+        assert isinstance(sent[0].get("id"), str) and sent[0]["id"]
 
 
 @pytest.mark.parametrize("case", CONCURRENT, ids=[c["id"] for c in CONCURRENT])

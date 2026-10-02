@@ -54,6 +54,14 @@ request signing (HMAC) ships; see "Versioning" in README.md.
   read as `/` in the symbol; futures names exactly; the last error covers any rest). An error frame
   is attributed only to the request whose id it carries. Refused channels are not held and not retried. A batch is still sent as one
   frame.
+- **WebSocket subscribe contract (cexy-api-spec `ace4a5e`).** Ack names now match with the channel
+  KIND exact: only the spot market symbol is canonicalised (trimmed, upper-cased, `_` read as `/`),
+  so `Ticker:BTC/USDT` is no longer taken for `ticker:BTC/USDT` (it used to case-fold the kind and
+  could pair an ack name with the wrong sent channel). Two spellings of one channel in a request,
+  or a channel already held under another spelling, are sent once; ack names are matched as a
+  multiset (the ack can repeat a name) and each accepted name is returned once. Events that arrive
+  before the ack and id-less error frames (`CONCURRENT_MODIFICATION`) are covered by conformance:
+  events are delivered and id-less errors are never attributed to a subscribe.
 - **Re-subscribes after a reconnect or a re-auth:** every refusal is reported (`subscribe_refused`);
   a private channel refused `UNAUTHENTICATED` goes back to pending (subscribed after the next
   successful auth) and any other refusal drops the channel, instead of putting every channel back to pending (re-auth) or failing

@@ -19,6 +19,8 @@ SPEC = load("ws/futures.json")
 WELCOME = {**load("ws/welcome.json"), "challenge": "challenge-1"}
 FRAMES = SPEC["frames"]
 SCENARIOS = SPEC["scenarios"]
+#: A scripted frame with ``"id": NO_ID`` is sent without an id; one with an explicit ``id`` keeps it.
+NO_ID: Any = object()
 ACK_OP = {"subscribed": "subscribe", "unsubscribed": "unsubscribe", "authenticated": "auth_key"}
 
 
@@ -29,7 +31,8 @@ class Signer:
 
 class FuturesServer:
     """Answers every request; ``script[(op, n)]`` replaces the reply to the n-th ``op`` request
-    (0-based) with the given frames (the request's id is added)."""
+    (0-based) with the given frames (the request's id is added unless the frame has an ``id``;
+    ``"id": NO_ID`` sends it without one)."""
 
     def __init__(self) -> None:
         self.received: List[Dict[str, Any]] = []
@@ -53,7 +56,10 @@ class FuturesServer:
             scripted = self.script.get((op, n))
             if scripted is not None:
                 for frame in scripted:
-                    await conn.send(json.dumps({**frame, "id": rid}))
+                    out = {**frame, "id": rid} if "id" not in frame else dict(frame)
+                    if out["id"] is NO_ID:
+                        del out["id"]
+                    await conn.send(json.dumps(out))
             elif op == "subscribe":
                 accepted = []
                 for ch in msg["channels"]:
