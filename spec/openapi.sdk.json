@@ -83,7 +83,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -123,7 +125,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -181,7 +185,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -238,7 +244,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -337,7 +345,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -436,7 +446,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -475,7 +487,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -546,7 +560,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -717,7 +733,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -770,7 +788,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -832,7 +852,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -894,7 +916,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -946,7 +970,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -1048,7 +1074,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -1116,7 +1144,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -1536,7 +1566,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -1592,7 +1624,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -2170,7 +2204,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "trade"
@@ -2279,7 +2315,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "trade"
@@ -2375,7 +2413,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -2460,7 +2500,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "trade"
@@ -2517,7 +2559,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -2584,7 +2628,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "trade"
@@ -2697,7 +2743,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -2754,7 +2802,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -2819,7 +2869,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "trade"
@@ -2918,7 +2970,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -2997,7 +3051,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read",
@@ -3097,7 +3153,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -3154,7 +3212,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -3193,7 +3253,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -3292,7 +3354,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -3349,7 +3413,9 @@
         "security": [
           {
             "api_key": [],
-            "api_secret": []
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
           }
         ],
         "x-required-scope": "read"
@@ -6410,6 +6476,24 @@
         "in": "header",
         "name": "X-API-Key",
         "description": "Identifies the key. Sent with `X-API-Timestamp`, `X-API-Nonce` and `X-API-Signature`, which authenticate it: all four are required, and the secret itself is never sent (a request carrying `X-API-Secret` is refused with `SIGNATURE_REQUIRED`). Create one in the account's security settings (cexy.io/account/security/api-keys, or `POST /api/v1/account/api-keys` with a session); the secret is shown once and never again. A key can read and trade. It can never withdraw or transfer, whatever its scopes, because those need a recently verified two-factor code and a program cannot produce one."
+      },
+      "api_nonce": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Nonce",
+        "description": "16 to 64 of `A-Z a-z 0-9 - _`, new for every request and every retry; a reused one is refused with `NONCE_REUSED`."
+      },
+      "api_signature": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Signature",
+        "description": "Lowercase hex HMAC-SHA256, keyed with the UTF-8 bytes of the key's secret as issued (64 hex characters, not decoded), of the canonical request: `CEXY-HMAC-SHA256-v1`, the method, the canonical path, the canonical query, the timestamp, the nonce and the body's SHA-256, joined by newlines. The request-signing guide gives the canonical forms and test vectors."
+      },
+      "api_timestamp": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Timestamp",
+        "description": "A signed request's time, unix milliseconds. At most `security.signature_window` (30 s) behind the server's clock and at most 5 s ahead of it, else `SIGNATURE_EXPIRED` with `details.server_time_ms`. For up to 5 s after the server's replay protection restarts, a signed request is answered 503 `SERVICE_UNAVAILABLE` (retryable, `details.reason` `nonce_store_warming`, `Retry-After`): sign again then."
       }
     }
   }

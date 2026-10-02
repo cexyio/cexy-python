@@ -62,8 +62,12 @@ def test_every_schema_is_generated() -> None:
     # Scalar aliases are inlined by the generator rather than emitted as classes: Amount (a
     # decimal string, which becomes decimal.Decimal) and DetailValue (string | integer | boolean).
     inlined = {"Amount", "DetailValue"}
-    missing = [n for n in SPEC["components"]["schemas"] if n not in inlined and not hasattr(models, n)]
+    # Futures schemas renamed like in the other SDKs (scripts/generate.py SCHEMA_RENAMES).
+    renamed = {"Candle": "FuturesCandle", "Fill": "FuturesFill", "PublicTrade": "FuturesPublicTrade"}
+    names = [renamed.get(n, n) for n in SPEC["components"]["schemas"] if n not in inlined]
+    missing = [n for n in names if not hasattr(models, n)]
     assert missing == []
+    assert not any(hasattr(models, old) for old in renamed)
 
 
 # Dummy values for required arguments, by parameter name.

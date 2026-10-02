@@ -1,0 +1,211 @@
+{
+  "description": "Subscribe refusal handling (all channels, spot and futures). The server answers a subscribe frame (one id) channel by channel: an error frame per refused channel (carrying the request id, no channel name), then ONE `subscribed` ack listing the accepted channels in canonical form, or NO ack if nothing was accepted. Errors come before the ack. Client rules: (1) collect error frames by request id; (2) the request completes on its ack, or as soon as it has one error per channel sent, or at the ack timeout; (3) refused channels = the channels sent that are missing from the ack, in the order sent, paired with the errors in arrival order; if there are fewer errors than refused channels (the server stops processing at its 100-subscription limit with one error), the last error covers the rest; (4) ack names are matched with the server's canonicalisation: spot names case-insensitively with `_` treated as `/` in the market symbol (the server rewrites `btc_usdt` to `BTC/USDT`), futures names EXACTLY (coins are case-sensitive); (5) the call fails only if every channel sent was refused; otherwise it returns accepted + refused-with-errors; (6) timeout with at least one error = all unacknowledged channels refused; timeout with no error and no ack = TIMEOUT, channels stay held; (7) an error frame whose id belongs to ANOTHER in-flight request is attributed only to that request; (8) refused channels are not held and not retried; on re-subscribe after reconnect/re-auth a private channel refused UNAUTHENTICATED goes back to pending, any other refusal drops the channel and is reported.",
+  "cases": [
+    {
+      "id": "partly_refused_spot_batch",
+      "send": [
+        "ticker:BTC/USDT",
+        "ticker:NOPE/USDT",
+        "orderbook:ETH/USDT"
+      ],
+      "server": [
+        {
+          "type": "error",
+          "code": "NOT_FOUND",
+          "message": "Market not found"
+        },
+        {
+          "type": "subscribed",
+          "channels": [
+            "ticker:BTC/USDT",
+            "orderbook:ETH/USDT"
+          ]
+        }
+      ],
+      "expect": {
+        "added": [
+          "ticker:BTC/USDT",
+          "orderbook:ETH/USDT"
+        ],
+        "refused": {
+          "ticker:NOPE/USDT": "NOT_FOUND"
+        },
+        "fails": false
+      }
+    },
+    {
+      "id": "spot_canonicalised_in_ack",
+      "send": [
+        "ticker:btc_usdt"
+      ],
+      "server": [
+        {
+          "type": "subscribed",
+          "channels": [
+            "ticker:BTC/USDT"
+          ]
+        }
+      ],
+      "expect": {
+        "added": [
+          "ticker:BTC/USDT"
+        ],
+        "refused": {},
+        "fails": false
+      }
+    },
+    {
+      "id": "futures_coin_case_sensitive",
+      "send": [
+        "futures.orderbook:BTC",
+        "futures.orderbook:btc"
+      ],
+      "server": [
+        {
+          "type": "error",
+          "code": "NOT_FOUND",
+          "message": "Futures market not found"
+        },
+        {
+          "type": "subscribed",
+          "channels": [
+            "futures.orderbook:BTC"
+          ]
+        }
+      ],
+      "expect": {
+        "added": [
+          "futures.orderbook:BTC"
+        ],
+        "refused": {
+          "futures.orderbook:btc": "NOT_FOUND"
+        },
+        "fails": false
+      }
+    },
+    {
+      "id": "all_refused_no_ack",
+      "send": [
+        "futures.trades:BTC",
+        "futures.trades:ETH"
+      ],
+      "server": [
+        {
+          "type": "error",
+          "code": "RATE_LIMITED",
+          "message": "Too many new futures market subscriptions. Please retry shortly."
+        },
+        {
+          "type": "error",
+          "code": "RATE_LIMITED",
+          "message": "Too many new futures market subscriptions. Please retry shortly."
+        }
+      ],
+      "expect": {
+        "added": [],
+        "refused": {
+          "futures.trades:BTC": "RATE_LIMITED",
+          "futures.trades:ETH": "RATE_LIMITED"
+        },
+        "fails": true,
+        "completes_before_timeout": true
+      }
+    },
+    {
+      "id": "limit_stop_last_error_covers_rest",
+      "send": [
+        "ticker:A/USDT",
+        "ticker:B/USDT",
+        "ticker:C/USDT"
+      ],
+      "server": [
+        {
+          "type": "error",
+          "code": "RATE_LIMITED",
+          "message": "This connection may hold at most 100 subscriptions."
+        },
+        {
+          "type": "subscribed",
+          "channels": [
+            "ticker:A/USDT"
+          ]
+        }
+      ],
+      "expect": {
+        "added": [
+          "ticker:A/USDT"
+        ],
+        "refused": {
+          "ticker:B/USDT": "RATE_LIMITED",
+          "ticker:C/USDT": "RATE_LIMITED"
+        },
+        "fails": false
+      }
+    },
+    {
+      "id": "error_for_other_request_not_misattributed",
+      "concurrent": [
+        {
+          "request": "r1",
+          "send": [
+            "ticker:BTC/USDT"
+          ]
+        },
+        {
+          "request": "r2",
+          "send": [
+            "ticker:NOPE/USDT"
+          ]
+        }
+      ],
+      "server": [
+        {
+          "to": "r2",
+          "frame": {
+            "type": "error",
+            "code": "NOT_FOUND",
+            "message": "Market not found"
+          }
+        },
+        {
+          "to": "r1",
+          "frame": {
+            "type": "subscribed",
+            "channels": [
+              "ticker:BTC/USDT"
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "r1": {
+          "added": [
+            "ticker:BTC/USDT"
+          ],
+          "refused": {},
+          "fails": false
+        },
+        "r2": {
+          "added": [],
+          "refused": {
+            "ticker:NOPE/USDT": "NOT_FOUND"
+          },
+          "fails": true
+        }
+      }
+    },
+    {
+      "id": "timeout_without_answer",
+      "send": [
+        "ticker:BTC/USDT"
+      ],
+      "server": [],
+      "expect": {
+        "error_code": "TIMEOUT",
+        "held_after": [
+          "ticker:BTC/USDT"
+        ]
+      }
+    }
+  ]
+}

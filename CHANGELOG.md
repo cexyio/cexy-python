@@ -7,7 +7,7 @@ request signing (HMAC) ships; see "Versioning" in README.md.
 
 ### Added
 - **Futures data (read only)**, `client.futures` (sync and async), for the 9 futures operations
-  in cexy-api-spec `0d27236`. Public: `markets()`, `market(coin)`, `order_book(coin, depth=)`,
+  in cexy-api-spec `0523905`. Public: `markets()`, `market(coin)`, `order_book(coin, depth=)`,
   `candles(coin, interval, before=)`, `trades(coin, limit=)`. Account (`read` key, signed):
   `positions()`, `open_orders()`, `fills(cursor=)`, `funding(cursor=)`. Responses carry `as_of`
   and `stale`; account reads answer `has_account=False` without a futures account.
@@ -15,7 +15,8 @@ request signing (HMAC) ships; see "Versioning" in README.md.
   the shared conformance `futures/history_paging.json` (opaque cursor sent back verbatim, page
   until `next_cursor` is null, an empty page repeating the cursor is a busy provider: back off
   and retry the same cursor up to `max_busy_retries`, default 3, independent of the client's
-  request `max_retries`).
+  request `max_retries`; a retryable error between pages, e.g. 503 with `Retry-After`, is retried
+  for the same cursor by the normal retry policy).
 - `PagingError` with two local errors: `PagingStalledError` (`PAGING_STALLED`, retryable) when the
   provider stays busy past `max_busy_retries`, and `PagingCursorRepeatedError`
   (`PAGING_CURSOR_REPEATED`, not retryable) when a page with rows repeats the cursor that was sent
@@ -34,7 +35,10 @@ request signing (HMAC) ships; see "Versioning" in README.md.
   stopped). A refusal of that subscribe drops the channel and is reported.
 - `SubscribeResult.errors` (refused channel -> server error) and `.held`, the
   `subscribe_refused` event, `SubscribeRefusedError` and `WebSocketClient.pending_channels`.
-- Generated models for the futures schemas (`PerpMarket`, `Fill`, `Funding`, `Position`, ...).
+- Generated models for the futures schemas (`PerpMarket`, `FuturesFill`, `FuturesCandle`,
+  `FuturesPublicTrade`, `Funding`, `Position`, ...). The spec's `Fill`, `Candle` and `PublicTrade`
+  are renamed `Futures*` so they are not mistaken for the spot models, the same names as in the
+  other CEXY SDKs.
 
 ### Fixed
 - **WebSocket subscribe refusals, every channel (spot and futures).** The server answers a
@@ -46,8 +50,9 @@ request signing (HMAC) ships; see "Versioning" in README.md.
   accepted channels plus the refused ones with their errors (`refused`, `errors`; also a
   `subscribe_refused` event) and raises `SubscribeRefusedError` only when every channel sent was
   refused (`TIMEOUT`/`DISCONNECTED` when no error arrived). Errors pair with the channels missing
-  from the ack in sent order (spot names case-insensitively, futures names exactly; the last error
-  covers any rest). Refused channels are not held and not retried. A batch is still sent as one
+  from the ack in sent order (spot names as the server canonicalises them: case-insensitive, `_`
+  read as `/` in the symbol; futures names exactly; the last error covers any rest). An error frame
+  is attributed only to the request whose id it carries. Refused channels are not held and not retried. A batch is still sent as one
   frame.
 - **Re-subscribes after a reconnect or a re-auth:** every refusal is reported (`subscribe_refused`);
   a private channel refused `UNAUTHENTICATED` goes back to pending (subscribed after the next

@@ -400,20 +400,23 @@ class OrderBook:
         )
 
 
+def _spot_key(name: str) -> str:
+    """A spot channel name as the server canonicalises it: case-insensitive, and ``_`` read as
+    ``/`` in the market symbol (``ticker:btc_usdt`` is acknowledged as ``ticker:BTC/USDT``)."""
+    kind, sep, symbol = name.strip().partition(":")
+    return kind.casefold() + sep + symbol.replace("_", "/").casefold()
+
+
 def _unmatched(sent: List[str], accepted: List[str]) -> List[str]:
-    """The sent channels the ack does not list, in send order: the refused ones. The server
-    canonicalises spot names (``ticker:btc/usdt`` -> ``ticker:BTC/USDT``), so spot names are
-    compared ignoring case and surrounding whitespace; futures names are case-sensitive and echoed
-    as sent, so they are compared exactly."""
-
-    def key(name: str) -> str:
-        return name if is_futures_channel(name) else name.strip().casefold()
-
+    """The sent channels the ack does not list, in send order: the refused ones. Spot names are
+    compared the way the server canonicalises them (``_spot_key``); futures names are
+    case-sensitive and echoed as sent, so they are compared exactly."""
     left = list(sent)
     for name in accepted:
         match = next((s for s in left if s == name), None)
-        if match is None:
-            match = next((s for s in left if not is_futures_channel(s) and key(s) == key(name)), None)
+        if match is None and not is_futures_channel(name):
+            key = _spot_key(name)
+            match = next((s for s in left if not is_futures_channel(s) and _spot_key(s) == key), None)
         if match is not None:
             left.remove(match)
     return left

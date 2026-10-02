@@ -666,7 +666,7 @@ class AsyncFutures(_Resource):
         payload = await self._t.request("funding", query={"cursor": cursor})
         return m.FuturesFundingResponse.model_validate(_data(payload))
 
-    async def iter_fills(self, *, max_busy_retries: int = 3) -> AsyncIterator[m.Fill]:
+    async def iter_fills(self, *, max_busy_retries: int = 3) -> AsyncIterator[m.FuturesFill]:
         """Every fill, newest first, across all pages, fetched lazily (shared conformance:
         futures/history_paging.json).
 

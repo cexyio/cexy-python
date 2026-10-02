@@ -279,7 +279,9 @@ for payment in client.futures.iter_funding():   # every funding payment
   later. A page *with* rows that repeats the cursor just sent is a server fault: its rows are
   yielded, then `PagingCursorRepeatedError` (`PAGING_CURSOR_REPEATED`, not retryable) is raised
   instead of looping. After either error the rows already yielded are not the complete history;
-  both errors carry the cursor in `details["cursor"]`.
+  both errors carry the cursor in `details["cursor"]`. A retryable error between pages (e.g. 503
+  with `Retry-After`) is retried for the same cursor by the client's normal retry policy, and
+  paging continues. Rows are `FuturesFill` and `Funding` models (funding rows have no id).
 - When nothing usable is cached and the provider cannot be read, the server answers 503
   `SERVICE_UNAVAILABLE` with `details["reason"] == "futures_data_unavailable"` and a
   `Retry-After` (1 to 30 s). It is retryable: the client retries it like any 503 and then
@@ -343,8 +345,9 @@ The client handles the protocol rules for you:
   `SubscribeRefusedError` (a `WebSocketError` with the first error's `code`, and `.result`). A
   timeout counts as "all refused" once at least one error frame has arrived; with no ack and no
   error it raises `TIMEOUT` and the channels stay held, so a reconnect sends them again. Errors
-  pair with the channels missing from the ack, in the order sent (spot names compared ignoring
-  case, as the server normalises them; futures names exactly); if there are fewer errors than
+  pair with the channels missing from the ack, in the order sent (spot names compared the way the
+  server canonicalises them, ignoring case and reading `_` as `/` in the symbol, so
+  `ticker:btc_usdt` acknowledged as `ticker:BTC/USDT` is accepted; futures names exactly); if there are fewer errors than
   missing channels (the server stops at its 100-subscription limit), the last error covers the
   rest.
 - **Re-subscribing by itself** (after a reconnect, a re-auth, or `futures.resync` on

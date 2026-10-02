@@ -16,6 +16,10 @@ from tests.conftest import BASE, KEY, SECRET, AsyncSleepRecorder, SleepRecorder,
 
 PAGING = load("futures/history_paging.json")
 CASES = PAGING["cases"]
+FUNDING_CASES = PAGING["funding_cases"]
+# (rows key, case): fills cases on /fills, funding cases on /funding
+ALL_CASES = [("fills", c) for c in CASES] + [("funding", c) for c in FUNDING_CASES]
+ALL_IDS = [f"{k}-{c['id']}" for k, c in ALL_CASES]
 FILLS_URL = BASE + "/api/v1/futures/fills"
 FUNDING_URL = BASE + "/api/v1/futures/funding"
 AS_OF = "2026-10-02T08:00:00Z"
@@ -37,9 +41,8 @@ SIGNED = ("X-API-Key", "X-API-Timestamp", "X-API-Nonce", "X-API-Signature")
 class Pages:
     """Serves a case's pages in order and records the requests."""
 
-    def __init__(self, case: Dict[str, Any], rows_key: str = "fills") -> None:
+    def __init__(self, case: Dict[str, Any]) -> None:
         self.pages = case["pages"]
-        self.rows_key = rows_key
         self.requests: List[httpx.Request] = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -50,24 +53,23 @@ class Pages:
         assert request.url.params.get("cursor") == page["request_cursor"]
         if page["request_cursor"] is None:
             assert b"cursor" not in request.url.query
-        body = dict(page["response"])
-        if self.rows_key != "fills":
-            body[self.rows_key] = [funding_row(r) for r in body.pop("fills")]
-        return httpx.Response(200, json={"data": body})
+        if "http_status" in page:  # an error answer: body and headers as given
+            return httpx.Response(page["http_status"], json=page["response"], headers=page.get("headers", {}))
+        return httpx.Response(200, json={"data": page["response"]})
 
 
-def funding_row(fill: Dict[str, Any]) -> Dict[str, Any]:
-    # The fixture's rows are fills; for funding, carry the id in an extra field.
-    return {"coin": fill["coin"], "amount": "-0.5", "position_size": "0.01", "rate": "0.0000125",
-            "time": fill["time"], "id": fill["id"]}  # fmt: skip
+def row_key(rows_key: str, row: Any) -> Any:
+    return row.id if rows_key == "fills" else row.time  # funding rows have no id
 
 
 def check(
-    case: Dict[str, Any], pages: Pages, ids: List[str], err: Optional[BaseException], sleeps: List[float]
+    case: Dict[str, Any], pages: Pages, ids: List[Any], err: Optional[BaseException], sleeps: List[float]
 ) -> None:
     exp = case["expect"]
     assert len(pages.requests) == exp["requests"]
     assert len(sleeps) == exp["sleeps"]
+    if "min_sleep_seconds" in exp:
+        assert all(s >= exp["min_sleep_seconds"] for s in sleeps)
     if "error_code" in exp:
         cls = {"PAGING_STALLED": cexy.PagingStalledError, "PAGING_CURSOR_REPEATED": cexy.PagingCursorRepeatedError}
         assert type(err) is cls[exp["error_code"]] and isinstance(err, cexy.PagingError)
@@ -76,7 +78,7 @@ def check(
         assert ids == exp["ids_before_error"]
     else:
         assert err is None
-        assert ids == exp["ids"]
+        assert ids == (exp["ids"] if "ids" in exp else exp["times"])
     if "encoded_query_of_request_2" in exp:
         assert pages.requests[1].url.query.decode() == exp["encoded_query_of_request_2"]
     for req in pages.requests:
@@ -98,35 +100,34 @@ def test_fixture_max_busy_retries_is_the_default() -> None:
         assert inspect.signature(fn).parameters["max_busy_retries"].default == PAGING["max_busy_retries"]
     ids = {c["id"] for c in CASES}
     assert {"busy_provider_gives_up_after_max_retries", "nonempty_page_repeating_cursor_fails"} <= ids
+    assert {"real_cursor_formats", "unavailable_mid_paging_retried"} <= ids and FUNDING_CASES
 
 
-@pytest.mark.parametrize("rows_key", ["fills", "funding"])
-@pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
+@pytest.mark.parametrize("rows_key,case", ALL_CASES, ids=ALL_IDS)
 def test_history_paging_conformance_sync(case: Dict[str, Any], rows_key: str) -> None:
     sleeps = SleepRecorder()
     client = sync_client(sleeps)
-    pages = Pages(case, rows_key)
+    pages = Pages(case)
     url = FILLS_URL if rows_key == "fills" else FUNDING_URL
-    ids: List[str] = []
+    ids: List[Any] = []
     err: Optional[BaseException] = None
     with respx.mock:
         respx.get(url__startswith=url).mock(side_effect=pages)
         it = client.futures.iter_fills() if rows_key == "fills" else client.futures.iter_funding()
         try:
             for row in it:
-                ids.append(row.id if rows_key == "fills" else row.model_extra["id"])  # type: ignore[union-attr,index]
+                ids.append(row_key(rows_key, row))
         except cexy.CexyApiError as exc:
             err = exc
     check(case, pages, ids, err, sleeps.calls)
 
 
-@pytest.mark.parametrize("rows_key", ["fills", "funding"])
-@pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
+@pytest.mark.parametrize("rows_key,case", ALL_CASES, ids=ALL_IDS)
 async def test_history_paging_conformance_async(case: Dict[str, Any], rows_key: str) -> None:
     sleeps = AsyncSleepRecorder()
-    pages = Pages(case, rows_key)
+    pages = Pages(case)
     url = FILLS_URL if rows_key == "fills" else FUNDING_URL
-    ids: List[str] = []
+    ids: List[Any] = []
     err: Optional[BaseException] = None
     async with cexy.AsyncClient(api_key=KEY, api_secret=SECRET) as client:
         client._transport._sleep = sleeps
@@ -135,7 +136,7 @@ async def test_history_paging_conformance_async(case: Dict[str, Any], rows_key: 
             it = client.futures.iter_fills() if rows_key == "fills" else client.futures.iter_funding()
             try:
                 async for row in it:
-                    ids.append(row.id if rows_key == "fills" else row.model_extra["id"])  # type: ignore[union-attr,index]
+                    ids.append(row_key(rows_key, row))
             except cexy.CexyApiError as exc:
                 err = exc
     check(case, pages, ids, err, sleeps.calls)

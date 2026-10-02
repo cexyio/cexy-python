@@ -6,13 +6,15 @@ private channel) or dropped and reported (anything else)."""
 from __future__ import annotations
 
 import asyncio
-from typing import List
+import json
+from typing import Any, Dict, List, Tuple
 
 import pytest
 from websockets.asyncio.server import serve
 
 from cexy import ws as cws
 from cexy.ws import WebSocketClient
+from tests.conftest import load
 from tests.test_ws_futures import FuturesServer, drain, make, until
 
 
@@ -167,3 +169,71 @@ async def test_reauth_resubscribe_refusals(server: FuturesServer) -> None:
         refused = [(e.channel, e.data["code"]) for e in events if e.type == cws.SUBSCRIBE_REFUSED]
         assert sorted(refused) == [("balances", "UNAUTHENTICATED"), ("futures.account", "NOT_FOUND")]
         assert len(subscribes(server)) == n + 1  # not retried
+
+
+# -- conformance/ws/subscribe_refusals.json ---------------------------------------------
+
+REFUSALS = load("ws/subscribe_refusals.json")
+SIMPLE = [c for c in REFUSALS["cases"] if "send" in c]
+CONCURRENT = [c for c in REFUSALS["cases"] if "concurrent" in c]
+
+
+def outcome(res: Any) -> Dict[str, Any]:
+    return {"added": res.added, "refused": {c: e.code for c, e in res.errors.items()}}
+
+
+async def run_subscribe(ws: WebSocketClient, channels: List[str]) -> Tuple[Dict[str, Any], bool]:
+    try:
+        return outcome(await ws.subscribe(*channels)), False
+    except cws.SubscribeRefusedError as exc:
+        return outcome(exc.result), True
+
+
+def test_refusal_fixture_has_every_case() -> None:
+    assert len(REFUSALS["cases"]) == 7
+    assert "error_for_other_request_not_misattributed" in {c["id"] for c in CONCURRENT}
+
+
+@pytest.mark.parametrize("case", SIMPLE, ids=[c["id"] for c in SIMPLE])
+async def test_subscribe_refusals_conformance(server: FuturesServer, case: Dict[str, Any]) -> None:
+    server.script[("subscribe", 0)] = case["server"]
+    exp = case["expect"]
+    async with make(server) as ws:
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        if "error_code" in exp:
+            with pytest.raises(cws.WebSocketError) as exc:
+                await ws.subscribe(*case["send"])
+            assert exc.value.code == exp["error_code"]
+            assert not isinstance(exc.value, cws.SubscribeRefusedError)
+            assert sorted(ws.channels) == sorted(exp["held_after"])
+            return
+        got, failed = await run_subscribe(ws, case["send"])
+        assert got == {"added": exp["added"], "refused": exp["refused"]}
+        assert failed is exp["fails"]
+        if exp.get("completes_before_timeout"):
+            assert loop.time() - start < ws.request_timeout / 2
+        assert ws.channels == set(exp["added"])  # refused channels are not held
+        events = await drain(ws, 0.05)
+        refused = {e.channel: e.data["code"] for e in events if e.type == cws.SUBSCRIBE_REFUSED}
+        assert refused == exp["refused"]
+    assert len(subscribes(server)) == 1  # one frame, nothing retried
+
+
+@pytest.mark.parametrize("case", CONCURRENT, ids=[c["id"] for c in CONCURRENT])
+async def test_subscribe_refusals_concurrent(server: FuturesServer, case: Dict[str, Any]) -> None:
+    reqs = case["concurrent"]
+    for i in range(len(reqs)):
+        server.script[("subscribe", i)] = []  # answered below, in the case's order
+    async with make(server) as ws:
+        tasks = {r["request"]: asyncio.ensure_future(run_subscribe(ws, r["send"])) for r in reqs}
+        await until(lambda: len(subscribes(server)) == len(reqs), "both requests")
+        by_channels = {json.dumps(m["channels"]): m["id"] for m in server.requests() if m["op"] == "subscribe"}
+        ids = {r["request"]: by_channels[json.dumps(r["send"])] for r in reqs}
+        for item in case["server"]:
+            await server.push({**item["frame"], "id": ids[item["to"]]})
+        for name, task in tasks.items():
+            got, failed = await asyncio.wait_for(task, 2)
+            exp = case["expect"][name]
+            assert got == {"added": exp["added"], "refused": exp["refused"]}, name
+            assert failed is exp["fails"], name
