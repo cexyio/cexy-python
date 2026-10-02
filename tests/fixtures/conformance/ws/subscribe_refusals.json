@@ -1,5 +1,5 @@
 {
-  "description": "Subscribe refusal handling (all channels, spot and futures). The server answers a subscribe frame (one id) channel by channel: an error frame per refused channel (carrying the request id, no channel name), then ONE `subscribed` ack listing the accepted channels in canonical form, or NO ack if nothing was accepted. Errors come before the ack. Client rules: (1) collect error frames by request id; (2) the request completes on its ack, or as soon as it has one error per channel sent, or at the ack timeout; (3) refused channels = the channels sent that are missing from the ack, in the order sent, paired with the errors in arrival order; if there are fewer errors than refused channels (the server stops processing at its 100-subscription limit with one error), the last error covers the rest; (4) ack names are matched with the server's canonicalisation: the whole name is trimmed; channel KINDS match exactly (`Ticker:BTC/USDT` is refused VALIDATION_FAILED); a spot MARKET symbol is trimmed, uppercased and `_` becomes `/` (`btc_usdt` \u2192 `BTC/USDT`); futures names exactly (coins are case-sensitive). The ack can repeat a name (a channel already held, or two spellings of one channel in the request, are both acked): match ack names as a multiset, and preferably drop duplicates that canonicalise alike before sending; (5) the call fails only if every channel sent was refused; otherwise it returns accepted + refused-with-errors; (6) timeout with at least one error = all unacknowledged channels refused; timeout with no error and no ack = TIMEOUT, channels stay held; (7) an error frame whose id belongs to ANOTHER in-flight request is attributed only to that request; (8) refused channels are not held and not retried; on re-subscribe after reconnect/re-auth a private channel refused UNAUTHENTICATED goes back to pending, any other refusal drops the channel and is reported. (9) the server checks each channel in this order: parse (VALIDATION_FAILED), private without auth (UNAUTHENTICATED), the 100-subscription limit (one RATE_LIMITED, then it STOPS: later channels get nothing), market/source checks (NOT_FOUND, RATE_LIMITED, UNAUTHENTICATED), already held (acked), accepted; (10) events for a channel in an in-flight subscribe can arrive BEFORE its ack: deliver them, never drop them; (11) error frames with no id (CONCURRENT_MODIFICATION per lagged subscription, sign-in lockout, closing) are never subscribe answers: never attribute them to a request; the client always sends an id with subscribe; (12) match error CODES only: message texts are not part of the contract. Server-guaranteed (backend 6919535): one subscribe frame is processed to completion before the next client frame; errors in send order, all before the single ack, on one ordered queue; no ack if nothing was accepted; the ack lists accepted names in canonical form, in send order; every answer carries the request id. Not guaranteed: message texts.",
+  "description": "Subscribe refusal handling (all channels, spot and futures). The server answers a subscribe frame (one id) channel by channel: an error frame per refused channel (carrying the request id, no channel name), then ONE `subscribed` ack listing the accepted channels in canonical form, or NO ack if nothing was accepted. Errors come before the ack. Client rules: (1) collect error frames by request id; (2) the request completes on its ack, or as soon as it has one error per channel sent, or at the ack timeout; (3) refused channels = the channels sent that are missing from the ack, in the order sent, paired with the errors in arrival order; if there are fewer errors than refused channels (the server stops processing at its 100-subscription limit with one error), the last error covers the rest; (4) ack names are matched with the server's canonicalisation: the whole name is trimmed; channel KINDS match exactly (`Ticker:BTC/USDT` is refused VALIDATION_FAILED); a spot MARKET symbol is trimmed, uppercased and `_` becomes `/` (`btc_usdt` \u2192 `BTC/USDT`); futures names exactly (coins are case-sensitive). The ack can repeat a name (a channel already held, or two spellings of one channel in the request, are both acked): match ack names as a multiset, and preferably drop duplicates that canonicalise alike before sending; (5) the call fails only if every channel sent was refused; otherwise it returns accepted + refused-with-errors; (6) timeout with at least one error = all unacknowledged channels refused; timeout with no error and no ack = TIMEOUT, channels stay held; (7) an error frame whose id belongs to ANOTHER in-flight request is attributed only to that request; (8) refused channels are not held and not retried; on re-subscribe after reconnect/re-auth a private channel refused UNAUTHENTICATED goes back to pending, any other refusal drops the channel and is reported. (9) the server checks each channel in this order: parse (VALIDATION_FAILED), private without auth (UNAUTHENTICATED), the 100-subscription limit (one RATE_LIMITED, then it STOPS: later channels get nothing), market/source checks (NOT_FOUND, RATE_LIMITED, UNAUTHENTICATED), already held (acked), accepted; (10) events for a channel in an in-flight subscribe can arrive BEFORE its ack: deliver them, never drop them; (11) error frames with no id (CONCURRENT_MODIFICATION per lagged subscription, sign-in lockout, closing) are never subscribe answers: never attribute them to a request; the client always sends an id with subscribe; (12) match error CODES only: message texts are not part of the contract. Server-guaranteed (backend 6919535): one subscribe frame is processed to completion before the next client frame; errors in send order, all before the single ack, on one ordered queue; no ack if nothing was accepted; the ack lists accepted names in canonical form, in send order; every answer carries the request id. Not guaranteed: message texts. (13) an accepted channel is held, reported and re-sent after reconnect under the server's canonical name from the ack (e.g. `ticker:btc_usdt` is held as `ticker:BTC/USDT`), so held names match event channels.",
   "cases": [
     {
       "id": "partly_refused_spot_batch",
@@ -59,7 +59,10 @@
         "refused": {
           "ticker:nope_usdt": "NOT_FOUND"
         },
-        "fails": false
+        "fails": false,
+        "held_after": [
+          "ticker:BTC/USDT"
+        ]
       }
     },
     {
@@ -219,7 +222,7 @@
       "id": "channel_kind_is_exact",
       "send": [
         "Ticker:BTC/USDT",
-        "ticker:ETH/USDT"
+        "ticker:BTC/USDT"
       ],
       "server": [
         {
@@ -230,13 +233,13 @@
         {
           "type": "subscribed",
           "channels": [
-            "ticker:ETH/USDT"
+            "ticker:BTC/USDT"
           ]
         }
       ],
       "expect": {
         "added": [
-          "ticker:ETH/USDT"
+          "ticker:BTC/USDT"
         ],
         "refused": {
           "Ticker:BTC/USDT": "VALIDATION_FAILED"

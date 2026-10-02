@@ -29,6 +29,15 @@ class Signer:
         return "ak_test_key", "00" * 32
 
 
+def canonical(ch: str) -> str:
+    """The name the server acks: futures exactly, a spot market uppercased with ``_`` as ``/``."""
+    ch = ch.strip()
+    if ch.startswith("futures."):
+        return ch
+    kind, sep, market = ch.partition(":")
+    return kind + sep + market.strip().upper().replace("_", "/")
+
+
 class FuturesServer:
     """Answers every request; ``script[(op, n)]`` replaces the reply to the n-th ``op`` request
     (0-based) with the given frames (the request's id is added unless the frame has an ``id``;
@@ -67,7 +76,7 @@ class FuturesServer:
                         err = {"type": "error", "code": self.refuse[ch], "message": f"refused {ch}", "id": rid}
                         await conn.send(json.dumps(err))
                     else:
-                        accepted.append(ch)
+                        accepted.append(canonical(ch))
                 if accepted:
                     await conn.send(json.dumps({"type": "subscribed", "channels": accepted, "id": rid}))
             elif op == "unsubscribe":

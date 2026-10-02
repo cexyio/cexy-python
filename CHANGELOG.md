@@ -62,6 +62,11 @@ request signing (HMAC) ships; see "Versioning" in README.md.
   multiset (the ack can repeat a name) and each accepted name is returned once. Events that arrive
   before the ack and id-less error frames (`CONCURRENT_MODIFICATION`) are covered by conformance:
   events are delivered and id-less errors are never attributed to a subscribe.
+- **Held channel names (cexy-api-spec `6cea8f0`, rule 13).** An accepted channel is held under the
+  server's canonical name from the ack (`ticker:btc_usdt` is held as `ticker:BTC/USDT`), so held
+  names match event channels. A channel held as sent after a `TIMEOUT` is now held under the
+  canonical name once a re-subscribe is acked (it used to be held under both), and is re-sent under
+  it. `unsubscribe` finds a held channel under any spelling the server canonicalises alike.
 - **Re-subscribes after a reconnect or a re-auth:** every refusal is reported (`subscribe_refused`);
   a private channel refused `UNAUTHENTICATED` goes back to pending (subscribed after the next
   successful auth) and any other refusal drops the channel, instead of putting every channel back to pending (re-auth) or failing

@@ -126,10 +126,38 @@ async def test_channel_kind_is_matched_exactly(server: FuturesServer) -> None:
 async def test_two_spellings_of_one_channel_are_sent_once(server: FuturesServer) -> None:
     async with make(server) as ws:
         res = await ws.subscribe("ticker:btc_usdt", "ticker:BTC/USDT", " ticker:btc/usdt ")
-        assert res.refused == [] and ws.channels == {"ticker:btc_usdt"}
-        res = await ws.subscribe("ticker:BTC/USDT")  # already held under another spelling
+        # held under the server's canonical name from the ack (rule 13)
+        assert res.refused == [] and ws.channels == {"ticker:BTC/USDT"}
+        res = await ws.subscribe("ticker:btc_usdt")  # already held under another spelling
         assert res.added == [] and res.refused == []
     assert subscribes(server) == [["ticker:btc_usdt"]]
+
+
+async def test_unsubscribe_finds_any_spelling(server: FuturesServer) -> None:
+    async with make(server) as ws:
+        await ws.subscribe("ticker:btc_usdt")
+        assert ws.channels == {"ticker:BTC/USDT"}
+        await ws.unsubscribe("ticker:btc/usdt")
+        assert ws.channels == set()
+
+
+async def test_timed_out_channel_is_held_canonically_once_reacked(server: FuturesServer) -> None:
+    # No answer: TIMEOUT, held as sent; the re-subscribe after a reconnect is acked under the
+    # canonical name, and that is the name held from then on (rule 13).
+    server.script[("subscribe", 0)] = []
+    ws = WebSocketClient(server.url, allow_insecure=True, request_timeout=0.2, backoff_base=0.01, backoff_max=0.05)
+    async with ws:
+        with pytest.raises(cws.WebSocketError) as exc:
+            await ws.subscribe("ticker:eth_usdt")
+        assert exc.value.code == "TIMEOUT" and ws.channels == {"ticker:eth_usdt"}
+        await server.conn.close()
+        await until(lambda: ws.connections == 2 and len(subscribes(server)) == 2, "re-subscribe")
+        await until(lambda: ws.channels == {"ticker:ETH/USDT"}, "held canonically")
+        assert subscribes(server)[-1] == ["ticker:eth_usdt"]
+        n = len(subscribes(server))
+        await server.conn.close()
+        await until(lambda: ws.connections == 3 and len(subscribes(server)) == n + 1, "re-subscribe")
+        assert subscribes(server)[-1] == ["ticker:ETH/USDT"]  # re-sent under the canonical name
 
 
 def test_ack_names_match_as_a_multiset() -> None:

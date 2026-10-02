@@ -915,10 +915,14 @@ class WebSocketClient:
         self._spawn(self._emit(Event(type=SUBSCRIBE_REFUSED, channel=channel, data=data)))
 
     async def unsubscribe(self, *channels: str) -> None:
-        """Unsubscribe and wait for the ``unsubscribed`` acknowledgement."""
+        """Unsubscribe and wait for the ``unsubscribed`` acknowledgement. A channel is found under
+        any spelling the server canonicalises alike (``ticker:btc_usdt`` drops ``ticker:BTC/USDT``)."""
         for ch in channels:
-            self._channels.discard(ch)
-            self._pending_private.discard(ch)
+            key = _channel_key(ch)
+            for held in [c for c in (*self._channels, *self._pending_private) if _channel_key(c) == key]:
+                self._channels.discard(held)
+                self._pending_private.discard(held)
+                self._reset_seq(held)
             self._reset_seq(ch)
             if ch.startswith("orderbook:"):
                 self._books.pop(ch[len("orderbook:") :], None)
@@ -1304,6 +1308,9 @@ class WebSocketClient:
         except WebSocketError as exc:
             logger.warning("cexy.ws: re-subscribe failed: %s", exc.code)
             return
+        # Held under the server's canonical name from the ack (a channel held as
+        # ``ticker:btc_usdt`` after a timeout is held as ``ticker:BTC/USDT`` once acked).
+        self._channels.difference_update(c for c in channels if c not in errors and c not in accepted)
         self._channels.update(accepted)
         for ch, err in errors.items():
             self._report_refused(ch, err)  # every refusal is reported
