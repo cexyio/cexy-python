@@ -14,10 +14,14 @@ subscription. This client implements the rules in ``asyncapi.yaml``:
   per minute (the server closes the socket above 240, pings included);
 - reconnects with exponential backoff and full jitter, then re-authenticates,
   re-subscribes and takes a fresh order-book snapshot for every book;
-- ignores unknown event types and warns once on an unknown ``protocol_version``.
+- ignores unknown event types and warns once on an unknown ``protocol_version``;
+- futures channels (``futures_*`` helpers below): each is subscribed in a request of its own,
+  a server refusal is reported (``SubscribeResult.errors`` and a ``subscribe_refused`` event)
+  and never retried automatically, ``futures.resync`` is delivered with a ``resync``
+  notification, and on ``futures.account`` it also unsubscribes and subscribes again.
 
 Authentication: private channels (``orders``, ``balances``, ``deposits``,
-``withdrawals``, ``account``) need ``auth`` with a *session access token*, or ``auth_key``
+``withdrawals``, ``account``, ``futures.account``) need ``auth`` with a *session access token*, or ``auth_key``
 with an API key (``rest=AsyncClient(api_key, api_secret)``, which signs by default, or a
 ``key_signer``).
 """
@@ -31,6 +35,7 @@ import itertools
 import json
 import logging
 import random
+import re
 import warnings
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -62,7 +67,12 @@ logger = logging.getLogger("cexy.ws")
 
 DEFAULT_WS_URL = "wss://api.cexy.io/api/v1/ws"
 KNOWN_PROTOCOL_VERSIONS = frozenset({1})
-PRIVATE_CHANNELS = frozenset({"orders", "balances", "deposits", "withdrawals", "account"})
+#: The private futures channel: the account's positions and open orders.
+FUTURES_ACCOUNT = "futures.account"
+PRIVATE_CHANNELS = frozenset({"orders", "balances", "deposits", "withdrawals", "account", FUTURES_ACCOUNT})
+#: Candle intervals of ``futures.candles:{coin}:{interval}`` (exact, case-sensitive).
+FUTURES_INTERVALS = ("1m", "5m", "15m", "1h", "4h", "1d")
+_FUTURES_COIN = re.compile(r"[A-Za-z0-9]{1,20}", re.ASCII)
 MAX_CHANNEL_LENGTH = 64
 MAX_MESSAGE_BYTES = 64 * 1024
 BOOK_DEPTH = 50
@@ -84,7 +94,23 @@ RECONNECTED = "reconnected"
 SEQUENCE_GAP = "sequence_gap"
 BOOK_STALE = "book_stale"
 RESYNC = "resync"
-KNOWN_EVENT_TYPES = frozenset(
+#: The server refused a futures subscription (``channel`` is set; ``data``: ``code``, ``message``).
+#: It is not retried automatically: WebSocket errors carry no retry hint, so back off yourself
+#: (about 60 s after ``RATE_LIMITED``). The channel is not held.
+SUBSCRIBE_REFUSED = "subscribe_refused"
+FUTURES_EVENT_TYPES = frozenset(
+    {
+        "futures.mids",
+        "futures.orderbook.update",
+        "futures.trades.new",
+        "futures.candle.update",
+        "futures.status",
+        "futures.positions",
+        "futures.orders",
+        "futures.resync",
+    }
+)
+KNOWN_EVENT_TYPES = FUTURES_EVENT_TYPES | frozenset(
     {
         "ticker.update",
         "orderbook.update",
@@ -105,7 +131,13 @@ KNOWN_EVENT_TYPES = frozenset(
         "withdrawals.resync",
     }
 )
-SYNTHETIC_EVENT_TYPES = frozenset({AUTH_LOST, AUTH_CHANGED, RECONNECTED, BOOK_STALE, RESYNC, SEQUENCE_GAP})
+SYNTHETIC_EVENT_TYPES = frozenset(
+    {AUTH_LOST, AUTH_CHANGED, RECONNECTED, BOOK_STALE, RESYNC, SEQUENCE_GAP, SUBSCRIBE_REFUSED}
+)
+#: Request failures that are not a refusal by the server: raised, never reported as refused.
+_NOT_A_REFUSAL = frozenset({"TIMEOUT", "DISCONNECTED", "NOT_CONNECTED", "PROTOCOL"})
+#: Clients must send something at least this often (the server closes silent connections after 90-120 s).
+MAX_PING_INTERVAL = 60.0
 
 _warned_versions: Set[int] = set()
 
@@ -132,10 +164,102 @@ class Event:
     raw: Dict[str, Any] = field(default_factory=dict)
 
 
+class ChannelNameError(WebSocketError, ValueError):
+    """An invalid futures channel name (code ``CONFIG``), detected locally: nothing is sent."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__("CONFIG", message)
+
+
+def _futures_coin(coin: str) -> str:
+    if not isinstance(coin, str) or not _FUTURES_COIN.fullmatch(coin):
+        raise ChannelNameError(f"{coin!r} is not a futures coin (1-20 ASCII letters or digits, as listed)")
+    return coin
+
+
+def futures_mids() -> str:
+    """``futures.mids``: every futures coin's mid price (full set each frame)."""
+    return "futures.mids"
+
+
+def futures_orderbook(coin: str) -> str:
+    """``futures.orderbook:{coin}``. The coin is case-sensitive and sent exactly as given
+    (``"BTC"``, ``"kPEPE"``)."""
+    return f"futures.orderbook:{_futures_coin(coin)}"
+
+
+def futures_trades(coin: str) -> str:
+    """``futures.trades:{coin}``."""
+    return f"futures.trades:{_futures_coin(coin)}"
+
+
+def futures_candles(coin: str, interval: str) -> str:
+    """``futures.candles:{coin}:{interval}``; ``interval`` is one of ``1m 5m 15m 1h 4h 1d``."""
+    _futures_coin(coin)
+    if interval not in FUTURES_INTERVALS:
+        raise ChannelNameError(f"interval must be one of {' '.join(FUTURES_INTERVALS)} (got {interval!r})")
+    return f"futures.candles:{coin}:{interval}"
+
+
+def futures_status() -> str:
+    """``futures.status``: transitions of the server's upstream market-data connection."""
+    return "futures.status"
+
+
+def futures_account() -> str:
+    """``futures.account`` (private): the account's positions and open orders, in full."""
+    return FUTURES_ACCOUNT
+
+
+def futures_channel(kind: str, *args: str) -> str:
+    """Build a futures channel by kind: ``mids``, ``orderbook``, ``trades``, ``candles``,
+    ``status`` or ``account``. Raises ``ChannelNameError`` (code ``CONFIG``) for a bad name."""
+    builders: Dict[str, Callable[..., str]] = {
+        "mids": futures_mids,
+        "orderbook": futures_orderbook,
+        "trades": futures_trades,
+        "candles": futures_candles,
+        "status": futures_status,
+        "account": futures_account,
+    }
+    builder = builders.get(kind)
+    if builder is None:
+        raise ChannelNameError(f"unknown futures channel kind {kind!r}")
+    try:
+        return builder(*args)
+    except TypeError:
+        raise ChannelNameError(f"wrong arguments for futures channel {kind!r}") from None
+
+
+def is_futures_channel(channel: str) -> bool:
+    return channel.startswith("futures.")
+
+
+def _check_futures_channel(channel: str) -> None:
+    """Validate a futures channel name given as a string (same rules as the helpers)."""
+    kind, _, rest = channel[len("futures.") :].partition(":")
+    args = rest.split(":") if rest else []
+    if kind in ("mids", "status", "account") and not args:
+        return
+    if kind in ("orderbook", "trades") and len(args) == 1:
+        futures_channel(kind, *args)
+        return
+    if kind == "candles" and len(args) == 2:
+        futures_channel(kind, *args)
+        return
+    raise ChannelNameError(f"invalid futures channel {channel!r}")
+
+
 @dataclass
 class SubscribeResult:
+    """``added``: acknowledged by the server. ``refused``: refused locally (subscription limit)
+    or, for futures channels, by the server (``errors`` has the server's error per channel).
+    ``held``: private channels kept until the next successful ``auth``/``auth_key``."""
+
     added: List[str]
     refused: List[str]
+    errors: Dict[str, WebSocketError] = field(default_factory=dict)
+    held: List[str] = field(default_factory=list)
 
 
 #: Marks a pending ``auth_key`` request in ``_pending_auth`` (tokens are strings).
@@ -325,7 +449,10 @@ class WebSocketClient:
     ) -> None:
         """``reorder_window``: seconds a missing private sequence number gets to arrive (channels with
         several publishers can swap adjacent frames) before it counts as a gap. ``clock``: TEST-ONLY
-        (see ``Clock``)."""
+        (see ``Clock``). ``ping_interval`` must be at most 60 s (the server closes a connection
+        whose client has been silent for 90-120 s)."""
+        if not 0 < ping_interval <= MAX_PING_INTERVAL:
+            raise ValueError(f"ping_interval must be > 0 and <= {MAX_PING_INTERVAL:.0f} seconds")
         # wss:// only; ws:// needs allow_insecure=True and a loopback host (local testing).
         check_scheme(url, "wss", "ws", allow_insecure)
         self.url = url
@@ -379,6 +506,7 @@ class WebSocketClient:
         self._seq: Dict[str, _SeqState] = {}
         self._live_balances: List[Any] = []
         self._balances_by_helper = False
+        self._restarting_account = False
 
     # -- lifecycle -----------------------------------------------------------------
 
@@ -639,11 +767,23 @@ class WebSocketClient:
 
     async def subscribe(self, *channels: str) -> SubscribeResult:
         """Subscribe to channels. Channels beyond the 100-subscription limit are refused
-        locally and reported in ``refused``; nothing is sent for them."""
+        locally and reported in ``refused``; nothing is sent for them.
+
+        Futures channels are validated locally first (``ChannelNameError``, code ``CONFIG``,
+        nothing sent). Each futures channel goes in a request of its own: when a frame names
+        several channels the server answers refusals with error frames before one ``subscribed``
+        ack, or with no ack at all. A futures refusal (``RATE_LIMITED``, ``NOT_FOUND``,
+        ``VALIDATION_FAILED``, ``SERVICE_UNAVAILABLE``...) does not raise: it is reported in
+        ``refused`` and ``errors`` and as a ``subscribe_refused`` event, and is never retried
+        automatically. ``futures.account`` before a successful ``auth``/``auth_key`` is held
+        (``held``) and subscribed once the connection is authenticated."""
         wanted: List[str] = []
         for ch in channels:
             if not ch or len(ch) > MAX_CHANNEL_LENGTH:
                 raise ValueError(f"invalid channel name {ch!r} (1-{MAX_CHANNEL_LENGTH} characters)")
+            if is_futures_channel(ch):
+                _check_futures_channel(ch)
+        for ch in channels:
             # Private channels waiting for the next successful auth count as held.
             if ch not in self._channels and ch not in self._pending_private and ch not in wanted:
                 wanted.append(ch)
@@ -651,13 +791,45 @@ class WebSocketClient:
         send, refused = wanted[:room], wanted[room:]
         if refused:
             logger.warning("cexy.ws: subscription limit %d reached; refused %s", self.max_subscriptions, refused)
-        if not send:
-            return SubscribeResult(added=[], refused=refused)
-        reply = await self._request({"op": "subscribe", "channels": send}, "subscribed")
+        held = [c for c in send if c == FUTURES_ACCOUNT and not self.authenticated]
+        self._pending_private.update(held)
+        send = [c for c in send if c not in held]
+        plain = [c for c in send if not is_futures_channel(c)]
+        added: List[str] = []
+        errors: Dict[str, WebSocketError] = {}
+        if plain:
+            reply = await self._request({"op": "subscribe", "channels": plain}, "subscribed")
+            acked = reply.get("channels")
+            batch = [c for c in (acked if isinstance(acked, list) else plain) if isinstance(c, str)]
+            self._channels.update(batch)
+            added.extend(batch)
+        for ch in send:
+            if ch in plain:
+                continue
+            ok, err = await self._subscribe_futures(ch)
+            added.extend(ok)
+            if err is not None:
+                refused.append(ch)
+                errors[ch] = err
+        return SubscribeResult(added=added, refused=refused, errors=errors, held=held)
+
+    async def _subscribe_futures(self, channel: str) -> Tuple[List[str], Optional[WebSocketError]]:
+        """Subscribe one futures channel. A server refusal is reported (event) and returned; a
+        timeout or a lost connection raises."""
+        try:
+            reply = await self._request({"op": "subscribe", "channels": [channel]}, "subscribed")
+        except WebSocketError as exc:
+            if exc.code in _NOT_A_REFUSAL:
+                raise
+            self._channels.discard(channel)
+            logger.warning("cexy.ws: subscription to %s refused: %s", channel, exc.code)
+            data = {"code": exc.code, "message": exc.message}
+            self._spawn(self._emit(Event(type=SUBSCRIBE_REFUSED, channel=channel, data=data)))
+            return [], exc
         acked = reply.get("channels")
-        added = [c for c in (acked if isinstance(acked, list) else send) if isinstance(c, str)]
-        self._channels.update(added)
-        return SubscribeResult(added=added, refused=refused)
+        ok = [c for c in (acked if isinstance(acked, list) else [channel]) if isinstance(c, str)]
+        self._channels.update(ok)
+        return ok, None
 
     async def unsubscribe(self, *channels: str) -> None:
         """Unsubscribe and wait for the ``unsubscribed`` acknowledgement."""
@@ -672,6 +844,11 @@ class WebSocketClient:
     @property
     def channels(self) -> Set[str]:
         return set(self._channels)
+
+    @property
+    def pending_channels(self) -> Set[str]:
+        """Private channels held until the next successful ``auth``/``auth_key``."""
+        return set(self._pending_private)
 
     @property
     def has_token(self) -> bool:
@@ -885,6 +1062,15 @@ class WebSocketClient:
         )
         if ev.channel in PRIVATE_CHANNELS and isinstance(ev.sequence, int) and not isinstance(ev.sequence, bool):
             self._track_seq(ev.channel, ev.sequence)
+        if ftype == "futures.resync":
+            # Data on this channel may have been missed: refetch over REST. On futures.account the
+            # server's poller stopped; subscribing again alone is a no-op, so unsubscribe first.
+            self._spawn(self._emit(ev))
+            data = {"reason": "futures_resync", "channel": ev.channel}
+            self._spawn(self._emit(Event(type=RESYNC, channel=ev.channel, data=data)))
+            if ev.channel == FUTURES_ACCOUNT and FUTURES_ACCOUNT in self._channels:
+                self._spawn(self._restart_futures_account())
+            return
         if ftype in ("balances.resync", "deposits.resync", "withdrawals.resync"):
             reason = str(ftype).replace(".", "_")  # balances_resync, deposits_resync, withdrawals_resync
             self._spawn(self._emit(ev))
@@ -1004,6 +1190,14 @@ class WebSocketClient:
         self._spawn(self._emit(Event(type=RESYNC, data={"reason": "reauth"})))
 
     async def _resubscribe(self, channels: List[str]) -> None:
+        for ch in [c for c in channels if is_futures_channel(c)]:
+            try:
+                await self._subscribe_futures(ch)  # a refusal drops the channel (not retried)
+            except WebSocketError as exc:
+                logger.warning("cexy.ws: private re-subscribe failed: %s", exc.code)
+        channels = [c for c in channels if not is_futures_channel(c)]
+        if not channels:
+            return
         try:
             await self._request({"op": "subscribe", "channels": channels}, "subscribed")
         except WebSocketError as exc:
@@ -1014,6 +1208,32 @@ class WebSocketClient:
                         self._channels.discard(c)
                         self._pending_private.add(c)
             logger.warning("cexy.ws: private re-subscribe failed: %s", exc.code)
+
+    async def _restart_futures_account(self) -> None:
+        """After ``futures.resync`` on ``futures.account``: unsubscribe, then subscribe again. A
+        refusal of the subscribe drops the channel and is reported (``subscribe_refused``)."""
+        if self._restarting_account:
+            return
+        self._restarting_account = True
+        ch = FUTURES_ACCOUNT
+        try:
+            try:
+                await self._request({"op": "unsubscribe", "channels": [ch]}, "unsubscribed")
+            except WebSocketError as exc:
+                logger.warning("cexy.ws: %s unsubscribe failed: %s", ch, exc.code)
+                if exc.code in _NOT_A_REFUSAL:
+                    return  # still held: a reconnect subscribes it again
+            if ch not in self._channels:
+                return  # unsubscribed or signed out meanwhile
+            self._channels.discard(ch)
+            self._reset_seq(ch)  # the server restarts this channel's sequence
+            try:
+                await self._subscribe_futures(ch)
+            except WebSocketError as exc:
+                logger.warning("cexy.ws: %s re-subscribe failed: %s", ch, exc.code)
+                self._channels.add(ch)  # not refused: keep it for the reconnect to restore
+        finally:
+            self._restarting_account = False
 
     async def _on_error(self, frame: Dict[str, Any]) -> None:
         code = str(frame.get("code"))

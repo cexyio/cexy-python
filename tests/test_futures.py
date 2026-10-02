@@ -69,9 +69,10 @@ def check(
     assert len(pages.requests) == exp["requests"]
     assert len(sleeps) == exp["sleeps"]
     if "error_code" in exp:
-        assert isinstance(err, cexy.PagingStalledError)
-        assert isinstance(err, cexy.CexyApiError)
+        cls = {"PAGING_STALLED": cexy.PagingStalledError, "PAGING_CURSOR_REPEATED": cexy.PagingCursorRepeatedError}
+        assert type(err) is cls[exp["error_code"]] and isinstance(err, cexy.PagingError)
         assert err.code == exp["error_code"] and err.retryable is exp["error_retryable"]
+        assert err.details["cursor"] == case["pages"][-1]["request_cursor"]
         assert ids == exp["ids_before_error"]
     else:
         assert err is None
@@ -89,9 +90,14 @@ def sync_client(sleeps: SleepRecorder) -> cexy.Client:
     return c
 
 
-def test_fixture_max_retries_is_the_default() -> None:
+def test_fixture_max_busy_retries_is_the_default() -> None:
+    import inspect
+
     assert PAGING["operation"] == "GET /api/v1/futures/fills"
-    assert PAGING["max_retries"] == 3
+    for fn in (cexy.Client().futures.iter_fills, cexy.AsyncClient().futures.iter_funding):
+        assert inspect.signature(fn).parameters["max_busy_retries"].default == PAGING["max_busy_retries"]
+    ids = {c["id"] for c in CASES}
+    assert {"busy_provider_gives_up_after_max_retries", "nonempty_page_repeating_cursor_fails"} <= ids
 
 
 @pytest.mark.parametrize("rows_key", ["fills", "funding"])
@@ -136,7 +142,7 @@ async def test_history_paging_conformance_async(case: Dict[str, Any], rows_key: 
 
 
 @pytest.mark.parametrize("max_retries", [0, 1, 5])
-def test_max_retries_is_configurable(max_retries: int) -> None:
+def test_max_busy_retries_is_configurable(max_retries: int) -> None:
     stalled = next(c for c in CASES if c["id"] == "busy_provider_gives_up_after_max_retries")
     busy = stalled["pages"][1]
     case = {"pages": [stalled["pages"][0]] + [busy] * (max_retries + 1)}
@@ -146,9 +152,9 @@ def test_max_retries_is_configurable(max_retries: int) -> None:
     with respx.mock:
         respx.get(url__startswith=FILLS_URL).mock(side_effect=pages)
         with pytest.raises(cexy.PagingStalledError) as exc:
-            list(client.futures.iter_fills(max_retries=max_retries))
+            list(client.futures.iter_fills(max_busy_retries=max_retries))
     assert len(pages.requests) == max_retries + 2 and len(sleeps.calls) == max_retries
-    assert exc.value.details == {"retries": max_retries}
+    assert exc.value.details == {"cursor": "c:S1", "retries": max_retries}
     assert client._transport.policy.is_retryable(exc.value)
 
 
@@ -270,7 +276,24 @@ def test_futures_data_unavailable_is_retried_then_raised() -> None:
     assert route.call_count == 3 and len(sleeps.calls) == 2 and all(2 <= s <= 2.25 for s in sleeps.calls)
 
 
-def test_paging_stalled_is_local_and_retryable() -> None:
-    err = cexy.PagingStalledError("stalled", retries=3)
+def test_paging_errors_are_local() -> None:
+    err = cexy.PagingStalledError("stalled", cursor="c:1", retries=3)
     assert err.code == "PAGING_STALLED" and err.retryable and not err.is_known_code
-    assert json.dumps(err.details) == '{"retries": 3}'
+    assert json.dumps(err.details) == '{"cursor": "c:1", "retries": 3}'
+    rep = cexy.PagingCursorRepeatedError("repeated", cursor="c:1")
+    assert rep.code == "PAGING_CURSOR_REPEATED" and not rep.retryable and not rep.is_known_code
+    assert rep.details == {"cursor": "c:1"}
+    assert not cexy.Client()._transport.policy.is_retryable(rep)
+
+
+def test_busy_retries_independent_of_request_retries() -> None:
+    # A client with request retries disabled still rides out a busy provider.
+    case = next(c for c in CASES if c["id"] == "busy_provider_same_cursor_retried")
+    sleeps = SleepRecorder()
+    client = cexy.Client(api_key=KEY, api_secret=SECRET, max_retries=0)
+    client._transport._sleep = sleeps
+    pages = Pages(case)
+    with respx.mock:
+        respx.get(url__startswith=FILLS_URL).mock(side_effect=pages)
+        assert [f.id for f in client.futures.iter_fills()] == case["expect"]["ids"]
+    assert len(sleeps.calls) == case["expect"]["sleeps"]

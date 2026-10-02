@@ -18,7 +18,14 @@ from cexy._common import AUTO
 from cexy._decimal import DecimalLike, to_wire, to_wire_opt
 from cexy._generated import models as m
 from cexy._opmap import operation
-from cexy.errors import CexyApiError, CexyConnectionError, NotFoundError, PagingStalledError, RateLimitError
+from cexy.errors import (
+    CexyApiError,
+    CexyConnectionError,
+    NotFoundError,
+    PagingCursorRepeatedError,
+    PagingStalledError,
+    RateLimitError,
+)
 
 DateLike = Union[datetime, str]
 Direction = Union[m.SortDirection, str]
@@ -659,30 +666,35 @@ class AsyncFutures(_Resource):
         payload = await self._t.request("funding", query={"cursor": cursor})
         return m.FuturesFundingResponse.model_validate(_data(payload))
 
-    async def iter_fills(self, *, max_retries: int = 3) -> AsyncIterator[m.Fill]:
+    async def iter_fills(self, *, max_busy_retries: int = 3) -> AsyncIterator[m.Fill]:
         """Every fill, newest first, across all pages, fetched lazily (shared conformance:
         futures/history_paging.json).
 
         The first request sends no cursor; each ``next_cursor`` is sent back verbatim until it is
         None. A short or empty page with a new cursor is normal. An EMPTY page whose
         ``next_cursor`` equals the cursor just sent means the provider is busy: wait (the
-        transport's backoff) and ask for the same cursor again, at most ``max_retries`` times in
-        a row, then raise :class:`~cexy.PagingStalledError` (``PAGING_STALLED``, retryable).
-        Rows already yielded stay yielded; the iteration is not complete. ``has_account`` False
-        ends with no rows.
+        transport's backoff) and ask for the same cursor again, at most ``max_busy_retries`` times
+        in a row, then raise :class:`~cexy.PagingStalledError` (``PAGING_STALLED``, retryable).
+        ``max_busy_retries`` is independent of the client's ``max_retries`` (request retries), so
+        a client with retries disabled still rides out a busy provider. A page WITH rows whose
+        ``next_cursor`` equals the cursor just sent is a server fault: its rows are yielded, then
+        :class:`~cexy.PagingCursorRepeatedError` (``PAGING_CURSOR_REPEATED``, not retryable) is
+        raised. After either error the rows already yielded are not the complete history.
+        ``has_account`` False ends with no rows.
         """
-        async for row in self._history("fills", max_retries):
+        async for row in self._history("fills", max_busy_retries):
             yield row
 
-    async def iter_funding(self, *, max_retries: int = 3) -> AsyncIterator[m.Funding]:
+    async def iter_funding(self, *, max_busy_retries: int = 3) -> AsyncIterator[m.Funding]:
         """Every funding payment, newest first, across all pages; the same rules as
         :meth:`iter_fills`."""
-        async for row in self._history("funding", max_retries):
+        async for row in self._history("funding", max_busy_retries):
             yield row
 
-    async def _history(self, kind: str, max_retries: int) -> AsyncIterator[Any]:
-        if max_retries < 0:
-            raise ValueError("max_retries must be >= 0")
+    async def _history(self, kind: str, max_busy_retries: int) -> AsyncIterator[Any]:
+        if max_busy_retries < 0:
+            raise ValueError("max_busy_retries must be >= 0")
+        path = f"GET /api/v1/futures/{kind}"
         cursor: Optional[str] = None
         busy = 0
         rows: List[Any]
@@ -695,11 +707,12 @@ class AsyncFutures(_Resource):
                 has_account, rows, next_cursor = funding.has_account, list(funding.funding), funding.next_cursor
             if not has_account:
                 return
-            if not rows and cursor is not None and next_cursor == cursor:
-                if busy >= max_retries:
+            repeated = cursor is not None and next_cursor == cursor
+            if repeated and not rows:
+                if busy >= max_busy_retries:
                     raise PagingStalledError(
-                        f"GET /api/v1/futures/{kind}: the provider stayed busy; "
-                        f"the same page came back empty {busy + 1} times in a row",
+                        f"{path}: the provider stayed busy; the same page came back empty {busy + 1} times in a row",
+                        cursor=next_cursor or "",
                         retries=busy,
                     )
                 await self._t._sleep(self._t.policy.backoff(busy))
@@ -708,6 +721,10 @@ class AsyncFutures(_Resource):
             busy = 0
             for row in rows:
                 yield row
+            if repeated:
+                raise PagingCursorRepeatedError(
+                    f"{path}: a page with rows repeated the cursor that was sent; stopping", cursor=next_cursor or ""
+                )
             if next_cursor is None:
                 return
             cursor = next_cursor

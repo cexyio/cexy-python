@@ -175,6 +175,7 @@ message.
 | `RateLimitError` | 429; `.retry_after` gives the server's requested wait |
 | `ServerError` | 5xx, e.g. `UNDER_MAINTENANCE`, `ENGINE_OVERLOADED` |
 | `PagingStalledError` | local, `PAGING_STALLED`: a futures history iterator gave up on a busy provider (retryable) |
+| `PagingCursorRepeatedError` | local, `PAGING_CURSOR_REPEATED`: a futures history page with rows repeated its cursor (not retryable) |
 
 An error code this SDK version does not know is raised as the base `CexyApiError`: it never
 crashes the client. Network failures after retries raise `CexyConnectionError`. Calling a
@@ -273,9 +274,12 @@ for payment in client.futures.iter_funding():   # every funding payment
   short, even empty, and still have a `next_cursor`, so keep going until it is `None`. An
   empty page whose `next_cursor` equals the cursor just sent means the provider is busy: the
   iterator waits (the normal retry backoff) and asks for the same cursor again, up to
-  `max_retries` times in a row (default 3), then raises `PagingStalledError` (code
-  `PAGING_STALLED`, a local error, retryable). The rows already yielded are then not the
-  complete history: start again later.
+  `max_busy_retries` times in a row (default 3; independent of the client's `max_retries`), then
+  raises `PagingStalledError` (code `PAGING_STALLED`, a local error, retryable): start again
+  later. A page *with* rows that repeats the cursor just sent is a server fault: its rows are
+  yielded, then `PagingCursorRepeatedError` (`PAGING_CURSOR_REPEATED`, not retryable) is raised
+  instead of looping. After either error the rows already yielded are not the complete history;
+  both errors carry the cursor in `details["cursor"]`.
 - When nothing usable is cached and the provider cannot be read, the server answers 503
   `SERVICE_UNAVAILABLE` with `details["reason"] == "futures_data_unavailable"` and a
   `Retry-After` (1 to 30 s). It is retryable: the client retries it like any 503 and then
@@ -346,7 +350,7 @@ The client handles the protocol rules for you:
 6. A `CONCURRENT_MODIFICATION` error frame (messages were dropped) triggers a fresh snapshot
    of every book and a `resync` event, so you can refresh other state too.
 
-**Private channels** (`orders`, `balances`, `deposits`, `withdrawals`, `account`) need
+**Private channels** (`orders`, `balances`, `deposits`, `withdrawals`, `account`, `futures.account`) need
 `await ws.auth(token)` with a session access token; it returns once the server sends
 `authenticated`. With an API key, use `await ws.auth_key()` on a WebSocket built from a
 client with your key (see [Request signing](#request-signing)). If the session is revoked, the `account` channel delivers `session.revoked` and the
@@ -371,6 +375,53 @@ are skipped (after a short reorder window, `reorder_window=0.25` seconds by defa
 emits `sequence_gap` and `resync` with `{"reason": "sequence_gap", "channel": ...}`: refetch that
 channel's state over REST. `balances.resync`, `deposits.resync` and `withdrawals.resync` (the last
 two planned) emit `resync` with `balances_resync`, `deposits_resync` or `withdrawals_resync`.
+
+### Futures channels
+
+```python
+import cexy
+from cexy import ws as cws
+
+async with cws.WebSocketClient(rest=cexy.AsyncClient(api_key="...", api_secret="...")) as ws:
+    await ws.auth_key()                               # only futures.account needs it
+    res = await ws.subscribe(
+        cws.futures_mids(),                           # futures.mids
+        cws.futures_orderbook("BTC"),                 # futures.orderbook:BTC
+        cws.futures_candles("BTC", "1m"),             # futures.candles:BTC:1m
+        cws.futures_account(),                        # futures.account (private)
+    )
+    for channel, err in res.errors.items():           # refused by the server: not retried
+        print("refused", channel, err.code)
+    async for event in ws:
+        if event.type == "futures.orderbook.update":
+            best_bid = event.data["bids"][0]          # {"price": "...", "size": "..."}
+        elif event.type == cws.RESYNC and event.channel:
+            ...                                       # refetch that channel over REST
+```
+
+- Channels: `futures.mids`, `futures.orderbook:{coin}`, `futures.trades:{coin}`,
+  `futures.candles:{coin}:{interval}` (`1m 5m 15m 1h 4h 1d`), `futures.status`, and the private
+  `futures.account` (`futures.positions` and `futures.orders`, full state on subscribe and on
+  change). The coin is case-sensitive and sent exactly as `GET /api/v1/futures/markets` lists
+  it (1-20 ASCII letters or digits). The helpers (and `subscribe()` for any `futures.*` string)
+  check names locally: a bad one raises `cexy.ws.ChannelNameError` (code `CONFIG`, a
+  `ValueError`) and nothing is sent.
+- Public futures channels send **no snapshot** on subscribe: seed from REST (`client.futures`).
+  Book levels are `{price, size}` objects; book, mids, positions and orders frames are complete
+  replacements. Public futures channels are not gap-tracked.
+- `futures.account` subscribed before `auth`/`auth_key` succeeds is held (`res.held`,
+  `ws.pending_channels`) and subscribed once the connection is authenticated.
+- `futures.resync` (`data: {}`) is delivered as an event, followed by `resync` with
+  `{"reason": "futures_resync", "channel": ...}`: refetch that channel over REST. On
+  `futures.account` the server's poller has stopped, so the client also unsubscribes and
+  subscribes again by itself; if that subscribe is refused (e.g. `NOT_FOUND` "No futures
+  account") the channel is dropped and a `subscribe_refused` event reports it.
+- Each futures channel is subscribed in a request of its own. A refusal (`RATE_LIMITED`,
+  `NOT_FOUND`, `VALIDATION_FAILED`, `SERVICE_UNAVAILABLE`) does not raise: it is listed in
+  `res.refused` and `res.errors` and emitted as `subscribe_refused`. It is **not retried
+  automatically**; WebSocket errors carry no retry hint, so wait (about 60 s after
+  `RATE_LIMITED`) before trying again.
+- `ping_interval` may be at most 60 s (default 30 s).
 
 ### Request signing
 

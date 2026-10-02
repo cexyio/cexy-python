@@ -120,15 +120,30 @@ class ServerError(CexyApiError):
     """5xx: server-side failure, maintenance or overload."""
 
 
-class PagingStalledError(CexyApiError):
-    """``PAGING_STALLED``: a local error, never sent by the server. A history iterator
-    (``client.futures.iter_fills`` / ``iter_funding``) got the same empty page back more than
-    ``max_retries`` times in a row because the provider stayed busy. Retryable: start the
-    iteration again later. The rows already yielded are not the complete history.
-    ``status`` is that of the last response (200); ``details["retries"]`` is the waits taken."""
+class PagingError(CexyApiError):
+    """A local error from a futures history iterator (``client.futures.iter_fills`` /
+    ``iter_funding``), never sent by the server. ``status`` is that of the last response (200);
+    ``details["cursor"]`` is the cursor that was sent. The rows already yielded are not the
+    complete history."""
 
-    def __init__(self, message: str, *, retries: int) -> None:
-        super().__init__("PAGING_STALLED", message, status=200, details={"retries": retries}, retryable=True)
+
+class PagingStalledError(PagingError):
+    """``PAGING_STALLED``: the same EMPTY page came back more than ``max_busy_retries`` times in
+    a row because the provider stayed busy. Retryable: start the iteration again later.
+    ``details["retries"]`` is the number of waits taken."""
+
+    def __init__(self, message: str, *, cursor: str, retries: int) -> None:
+        super().__init__(
+            "PAGING_STALLED", message, status=200, details={"cursor": cursor, "retries": retries}, retryable=True
+        )
+
+
+class PagingCursorRepeatedError(PagingError):
+    """``PAGING_CURSOR_REPEATED``: a page WITH rows came back with the cursor that was just sent
+    (a server fault). Its rows were yielded; iterating on would loop. Not retryable."""
+
+    def __init__(self, message: str, *, cursor: str) -> None:
+        super().__init__("PAGING_CURSOR_REPEATED", message, status=200, details={"cursor": cursor}, retryable=False)
 
 
 _BY_CODE: Dict[str, Type[CexyApiError]] = {}

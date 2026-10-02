@@ -7,17 +7,41 @@ request signing (HMAC) ships; see "Versioning" in README.md.
 
 ### Added
 - **Futures data (read only)**, `client.futures` (sync and async), for the 9 futures operations
-  in cexy-api-spec `ea7180f`. Public: `markets()`, `market(coin)`, `order_book(coin, depth=)`,
+  in cexy-api-spec `0d27236`. Public: `markets()`, `market(coin)`, `order_book(coin, depth=)`,
   `candles(coin, interval, before=)`, `trades(coin, limit=)`. Account (`read` key, signed):
   `positions()`, `open_orders()`, `fills(cursor=)`, `funding(cursor=)`. Responses carry `as_of`
   and `stale`; account reads answer `has_account=False` without a futures account.
 - `futures.iter_fills()` / `futures.iter_funding()`: every row across all pages, following
   the shared conformance `futures/history_paging.json` (opaque cursor sent back verbatim, page
   until `next_cursor` is null, an empty page repeating the cursor is a busy provider: back off
-  and retry the same cursor up to `max_retries`, default 3).
-- `PagingStalledError` (code `PAGING_STALLED`, local, retryable): raised when the provider stays
-  busy past `max_retries`.
+  and retry the same cursor up to `max_busy_retries`, default 3, independent of the client's
+  request `max_retries`).
+- `PagingError` with two local errors: `PagingStalledError` (`PAGING_STALLED`, retryable) when the
+  provider stays busy past `max_busy_retries`, and `PagingCursorRepeatedError`
+  (`PAGING_CURSOR_REPEATED`, not retryable) when a page with rows repeats the cursor that was sent
+  (its rows are yielded first). Both carry the cursor in `details["cursor"]`.
+- **Futures WebSocket channels** (`cexy.ws`, conformance `ws/futures.json`): the event types
+  `futures.mids`, `futures.orderbook.update`, `futures.trades.new`, `futures.candle.update`,
+  `futures.status`, `futures.positions`, `futures.orders` and `futures.resync` are delivered as
+  events. Channel helpers `futures_mids()`, `futures_orderbook(coin)`, `futures_trades(coin)`,
+  `futures_candles(coin, interval)`, `futures_status()`, `futures_account()` (and
+  `futures_channel(kind, ...)`) validate locally (`ChannelNameError`, code `CONFIG`, a
+  `ValueError`; nothing is sent); `subscribe()` applies the same check to `futures.*` strings.
+- `futures.account` is a private channel: subscribed before `auth`/`auth_key` it is held
+  (`SubscribeResult.held`, `ws.pending_channels`) until the connection is authenticated.
+- `futures.resync` emits the event plus `resync` (`{"reason": "futures_resync", "channel": ...}`);
+  on `futures.account` the client also unsubscribes and subscribes again (the server's poller
+  stopped). A refusal of that subscribe drops the channel and is reported.
+- Each futures channel is subscribed in a request of its own (the server sends error frames before
+  a single `subscribed` ack, or no ack when nothing was accepted). A server refusal of a futures
+  channel does not raise: it is reported in `SubscribeResult.refused` / `.errors` and as a
+  `subscribe_refused` event, and is never retried automatically (WebSocket errors carry no retry
+  hint).
 - Generated models for the futures schemas (`PerpMarket`, `Fill`, `Funding`, `Position`, ...).
+
+### Changed
+- `WebSocketClient(ping_interval=...)` must be at most 60 s (the server closes a connection whose
+  client has been silent for 90-120 s); a larger value raises `ValueError`.
 
 ## 0.1.0.dev11 (2026-10-01)
 

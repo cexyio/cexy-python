@@ -1,0 +1,518 @@
+{
+  "description": "Futures WebSocket channels (server 6919535). Binding client rules: (1) the six futures event types below and futures.resync are known event types, delivered as events with type, channel, sequence and data (never dropped as unknown); (2) channel-name helpers build futures.mids, futures.orderbook:{coin}, futures.trades:{coin}, futures.candles:{coin}:{interval}, futures.status and futures.account; the coin is sent exactly as given (case-sensitive, ASCII letters/digits, 1-20 chars) and the interval must be one of 1m 5m 15m 1h 4h 1d, else a local CONFIG error with nothing sent; (3) futures.account is a private channel: held until auth/auth_key succeeds, like the other private channels; (4) futures.resync on a public futures channel is delivered as an event plus a resync notification for that channel (refetch over REST), with no resubscribe; (5) futures.resync on futures.account is delivered the same way AND the client automatically sends unsubscribe then subscribe for futures.account (the server's poller stopped; re-subscribing alone is a no-op); a refusal of that subscribe (e.g. NOT_FOUND 'No futures account') is reported as an error and the channel is no longer held; (6) a refused futures subscribe (RATE_LIMITED, NOT_FOUND, VALIDATION_FAILED, SERVICE_UNAVAILABLE) is reported and NOT retried automatically: WS error frames carry no retry_after; (7) no snapshot arrives on subscribe for public futures channels: seed from REST; (8) book levels are {price,size} objects, not [price,quantity] arrays; book, mids, positions and orders frames are full replacements; (9) the client sends a ping at least every 60 s (the server closes connections silent for 90-120 s). Sequences: public futures channels are not gap-tracked (full replacements or unrecoverable); futures.account restarts its sequence after a resubscribe.",
+  "frames": [
+    {
+      "id": "mids",
+      "frame": {
+        "type": "futures.mids",
+        "channel": "futures.mids",
+        "sequence": 5521,
+        "timestamp": "2026-10-02T09:15:01.482913274Z",
+        "data": {
+          "mids": {
+            "BTC": "61012.5",
+            "ETH": "2398.45",
+            "kPEPE": "0.009871"
+          },
+          "as_of": "2026-10-02T09:15:01.750201022Z"
+        }
+      },
+      "expect": {
+        "event_type": "futures.mids",
+        "channel": "futures.mids",
+        "sequence": 5521
+      }
+    },
+    {
+      "id": "orderbook",
+      "frame": {
+        "type": "futures.orderbook.update",
+        "channel": "futures.orderbook:BTC",
+        "sequence": 18342,
+        "timestamp": "2026-10-02T09:15:01.482913274Z",
+        "data": {
+          "coin": "BTC",
+          "full": true,
+          "bids": [
+            {
+              "price": "61012",
+              "size": "3.41207"
+            },
+            {
+              "price": "61011",
+              "size": "0.8823"
+            }
+          ],
+          "asks": [
+            {
+              "price": "61013",
+              "size": "1.20514"
+            }
+          ],
+          "as_of": "2026-10-02T09:15:01.482909871Z"
+        }
+      },
+      "expect": {
+        "event_type": "futures.orderbook.update",
+        "channel": "futures.orderbook:BTC",
+        "best_bid": [
+          "61012",
+          "3.41207"
+        ],
+        "best_ask": [
+          "61013",
+          "1.20514"
+        ]
+      }
+    },
+    {
+      "id": "trades",
+      "frame": {
+        "type": "futures.trades.new",
+        "channel": "futures.trades:ETH",
+        "sequence": 90215,
+        "timestamp": "2026-10-02T09:15:01.482913274Z",
+        "data": {
+          "coin": "ETH",
+          "trades": [
+            {
+              "side": "buy",
+              "price": "2398.5",
+              "size": "1.2044",
+              "time": 1790932501987
+            },
+            {
+              "side": "sell",
+              "price": "2398.4",
+              "size": "0.05",
+              "time": 1790932501991
+            }
+          ]
+        }
+      },
+      "expect": {
+        "event_type": "futures.trades.new",
+        "channel": "futures.trades:ETH",
+        "trade_count": 2
+      }
+    },
+    {
+      "id": "candle",
+      "frame": {
+        "type": "futures.candle.update",
+        "channel": "futures.candles:BTC:1m",
+        "sequence": 3307,
+        "timestamp": "2026-10-02T09:15:01.482913274Z",
+        "data": {
+          "coin": "BTC",
+          "interval": "1m",
+          "candle": {
+            "open_time": 1790932500000,
+            "close_time": 1790932559999,
+            "open": "61001",
+            "high": "61020",
+            "low": "60998",
+            "close": "61012",
+            "volume": "18.40231",
+            "trades": 412
+          }
+        }
+      },
+      "expect": {
+        "event_type": "futures.candle.update",
+        "channel": "futures.candles:BTC:1m",
+        "open_time": 1790932500000
+      }
+    },
+    {
+      "id": "status",
+      "frame": {
+        "type": "futures.status",
+        "channel": "futures.status",
+        "sequence": 12,
+        "timestamp": "2026-10-02T09:15:01.482913274Z",
+        "data": {
+          "state": "degraded",
+          "since": "2026-10-02T09:20:44.019309120Z"
+        }
+      },
+      "expect": {
+        "event_type": "futures.status",
+        "channel": "futures.status",
+        "state": "degraded"
+      }
+    },
+    {
+      "id": "positions",
+      "frame": {
+        "type": "futures.positions",
+        "channel": "futures.account",
+        "sequence": 3,
+        "timestamp": "2026-10-02T09:15:01.482913274Z",
+        "data": {
+          "positions": {
+            "account_value": "10412.552311",
+            "total_notional": "12203.5",
+            "margin_used": "1220.35",
+            "maintenance_margin": "305.08",
+            "positions": [
+              {
+                "coin": "BTC",
+                "size": "0.2",
+                "entry_price": "60120.5",
+                "position_value": "12203.5",
+                "unrealized_pnl": "179.4",
+                "return_on_equity": "0.149215",
+                "leverage_type": "cross",
+                "leverage": 10,
+                "liquidation_price": "12877.3",
+                "margin_used": "1220.35",
+                "funding_since_open": "-1.204"
+              }
+            ]
+          },
+          "as_of": "2026-10-02T09:15:06.249880112Z",
+          "stale": false
+        }
+      },
+      "expect": {
+        "event_type": "futures.positions",
+        "channel": "futures.account",
+        "position_count": 1,
+        "stale": false
+      }
+    },
+    {
+      "id": "orders",
+      "frame": {
+        "type": "futures.orders",
+        "channel": "futures.account",
+        "sequence": 4,
+        "timestamp": "2026-10-02T09:15:01.482913274Z",
+        "data": {
+          "orders": [
+            {
+              "id": "o_9c1e4b7a2d0f6e31a4b05c77",
+              "coin": "ETH",
+              "side": "buy",
+              "price": "2350",
+              "size": "0.5",
+              "original_size": "1",
+              "placed_at": 1790931200412,
+              "reduce_only": false,
+              "order_type": "Limit",
+              "trigger_price": null
+            }
+          ],
+          "as_of": "2026-10-02T09:15:06.250114630Z",
+          "stale": false
+        }
+      },
+      "expect": {
+        "event_type": "futures.orders",
+        "channel": "futures.account",
+        "order_count": 1
+      }
+    }
+  ],
+  "channel_names": {
+    "valid": [
+      [
+        "mids",
+        [],
+        "futures.mids"
+      ],
+      [
+        "orderbook",
+        [
+          "BTC"
+        ],
+        "futures.orderbook:BTC"
+      ],
+      [
+        "orderbook",
+        [
+          "kPEPE"
+        ],
+        "futures.orderbook:kPEPE"
+      ],
+      [
+        "trades",
+        [
+          "ETH"
+        ],
+        "futures.trades:ETH"
+      ],
+      [
+        "candles",
+        [
+          "BTC",
+          "1m"
+        ],
+        "futures.candles:BTC:1m"
+      ],
+      [
+        "candles",
+        [
+          "SOL",
+          "1d"
+        ],
+        "futures.candles:SOL:1d"
+      ],
+      [
+        "status",
+        [],
+        "futures.status"
+      ],
+      [
+        "account",
+        [],
+        "futures.account"
+      ]
+    ],
+    "invalid": [
+      [
+        "orderbook",
+        [
+          "dex:BTC"
+        ]
+      ],
+      [
+        "orderbook",
+        [
+          "@107"
+        ]
+      ],
+      [
+        "orderbook",
+        [
+          ""
+        ]
+      ],
+      [
+        "orderbook",
+        [
+          "ABCDEFGHIJKLMNOPQRSTU"
+        ]
+      ],
+      [
+        "candles",
+        [
+          "BTC",
+          "1H"
+        ]
+      ],
+      [
+        "candles",
+        [
+          "BTC",
+          "2m"
+        ]
+      ]
+    ]
+  },
+  "scenarios": [
+    {
+      "id": "public_resync_is_notified_not_resubscribed",
+      "steps": [
+        {
+          "client": "subscribe",
+          "channels": [
+            "futures.orderbook:BTC"
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "futures.orderbook:BTC"
+            ]
+          }
+        },
+        {
+          "server": {
+            "type": "futures.resync",
+            "channel": "futures.orderbook:BTC",
+            "sequence": 7,
+            "timestamp": "2026-10-02T09:31:10.004812Z",
+            "data": {}
+          }
+        }
+      ],
+      "expect": {
+        "events": [
+          "futures.resync"
+        ],
+        "resync_channels": [
+          "futures.orderbook:BTC"
+        ],
+        "client_sends_after": []
+      }
+    },
+    {
+      "id": "account_resync_resubscribes",
+      "steps": [
+        {
+          "client": "auth_key"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "u1",
+            "auth": "api_key"
+          }
+        },
+        {
+          "client": "subscribe",
+          "channels": [
+            "futures.account"
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "futures.account"
+            ]
+          }
+        },
+        {
+          "server": {
+            "type": "futures.resync",
+            "channel": "futures.account",
+            "sequence": 9,
+            "timestamp": "2026-10-02T09:31:10.004812Z",
+            "data": {}
+          }
+        }
+      ],
+      "expect": {
+        "events": [
+          "futures.resync"
+        ],
+        "resync_channels": [
+          "futures.account"
+        ],
+        "client_sends_after": [
+          {
+            "op": "unsubscribe",
+            "channels": [
+              "futures.account"
+            ]
+          },
+          {
+            "op": "subscribe",
+            "channels": [
+              "futures.account"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "account_resubscribe_refused_drops_channel",
+      "steps": [
+        {
+          "client": "auth_key"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "u1",
+            "auth": "api_key"
+          }
+        },
+        {
+          "client": "subscribe",
+          "channels": [
+            "futures.account"
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "futures.account"
+            ]
+          }
+        },
+        {
+          "server": {
+            "type": "futures.resync",
+            "channel": "futures.account",
+            "sequence": 9,
+            "timestamp": "2026-10-02T09:31:10.004812Z",
+            "data": {}
+          }
+        },
+        {
+          "server_reply_to": "unsubscribe",
+          "frame": {
+            "type": "unsubscribed",
+            "channels": [
+              "futures.account"
+            ]
+          }
+        },
+        {
+          "server_reply_to": "subscribe",
+          "frame": {
+            "type": "error",
+            "code": "NOT_FOUND",
+            "message": "No futures account"
+          }
+        }
+      ],
+      "expect": {
+        "errors": [
+          "NOT_FOUND"
+        ],
+        "held_channels_after": []
+      }
+    },
+    {
+      "id": "account_needs_auth_first",
+      "steps": [
+        {
+          "client": "subscribe",
+          "channels": [
+            "futures.account"
+          ]
+        }
+      ],
+      "expect": {
+        "client_sends_after": [],
+        "held_pending_private": [
+          "futures.account"
+        ]
+      }
+    },
+    {
+      "id": "rate_limited_subscribe_not_retried",
+      "steps": [
+        {
+          "client": "subscribe",
+          "channels": [
+            "futures.trades:BTC"
+          ]
+        },
+        {
+          "server_reply_to": "subscribe",
+          "frame": {
+            "type": "error",
+            "code": "RATE_LIMITED",
+            "message": "Too many new futures market subscriptions. Please retry shortly."
+          }
+        }
+      ],
+      "expect": {
+        "errors": [
+          "RATE_LIMITED"
+        ],
+        "held_channels_after": [],
+        "client_sends_after": []
+      }
+    }
+  ],
+  "ping_interval_max_seconds": 60
+}
