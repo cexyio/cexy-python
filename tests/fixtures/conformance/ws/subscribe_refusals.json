@@ -36,9 +36,15 @@
     {
       "id": "spot_canonicalised_in_ack",
       "send": [
-        "ticker:btc_usdt"
+        "ticker:btc_usdt",
+        "ticker:nope_usdt"
       ],
       "server": [
+        {
+          "type": "error",
+          "code": "NOT_FOUND",
+          "message": "Market not found"
+        },
         {
           "type": "subscribed",
           "channels": [
@@ -50,7 +56,9 @@
         "added": [
           "ticker:BTC/USDT"
         ],
-        "refused": {},
+        "refused": {
+          "ticker:nope_usdt": "NOT_FOUND"
+        },
         "fails": false
       }
     },
