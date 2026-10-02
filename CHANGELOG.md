@@ -3,6 +3,81 @@
 All notable changes to this project are documented here. The SDK stays at 0.x until API
 request signing (HMAC) ships; see "Versioning" in README.md.
 
+## 0.1.0.dev12 (2026-10-02)
+
+### Added
+- **Futures data (read only)**, `client.futures` (sync and async), for the 9 futures operations
+  in cexy-api-spec `0523905`. Public: `markets()`, `market(coin)`, `order_book(coin, depth=)`,
+  `candles(coin, interval, before=)`, `trades(coin, limit=)`. Account (`read` key, signed):
+  `positions()`, `open_orders()`, `fills(cursor=)`, `funding(cursor=)`. Responses carry `as_of`
+  and `stale`; account reads answer `has_account=False` without a futures account.
+- `futures.iter_fills()` / `futures.iter_funding()`: every row across all pages, following
+  the shared conformance `futures/history_paging.json` (opaque cursor sent back verbatim, page
+  until `next_cursor` is null, an empty page repeating the cursor is a busy provider: back off
+  and retry the same cursor up to `max_busy_retries`, default 3, independent of the client's
+  request `max_retries`; a retryable error between pages, e.g. 503 with `Retry-After`, is retried
+  for the same cursor by the normal retry policy).
+- `PagingError` with two local errors: `PagingStalledError` (`PAGING_STALLED`, retryable) when the
+  provider stays busy past `max_busy_retries`, and `PagingCursorRepeatedError`
+  (`PAGING_CURSOR_REPEATED`, not retryable) when a page with rows repeats the cursor that was sent
+  (its rows are yielded first). Both carry the cursor in `details["cursor"]`.
+- **Futures WebSocket channels** (`cexy.ws`, conformance `ws/futures.json`): the event types
+  `futures.mids`, `futures.orderbook.update`, `futures.trades.new`, `futures.candle.update`,
+  `futures.status`, `futures.positions`, `futures.orders` and `futures.resync` are delivered as
+  events. Channel helpers `futures_mids()`, `futures_orderbook(coin)`, `futures_trades(coin)`,
+  `futures_candles(coin, interval)`, `futures_status()`, `futures_account()` (and
+  `futures_channel(kind, ...)`) validate locally (`ChannelNameError`, code `CONFIG`, a
+  `ValueError`; nothing is sent); `subscribe()` applies the same check to `futures.*` strings.
+- `futures.account` is a private channel: subscribed before `auth`/`auth_key` it is held
+  (`SubscribeResult.held`, `ws.pending_channels`) until the connection is authenticated.
+- `futures.resync` emits the event plus `resync` (`{"reason": "futures_resync", "channel": ...}`);
+  on `futures.account` the client also unsubscribes and subscribes again (the server's poller
+  stopped). A refusal of that subscribe drops the channel and is reported.
+- `SubscribeResult.errors` (refused channel -> server error) and `.held`, the
+  `subscribe_refused` event, `SubscribeRefusedError` and `WebSocketClient.pending_channels`.
+- Generated models for the futures schemas (`PerpMarket`, `FuturesFill`, `FuturesCandle`,
+  `FuturesPublicTrade`, `Funding`, `Position`, ...). The spec's `Fill`, `Candle` and `PublicTrade`
+  are renamed `Futures*` so they are not mistaken for the spot models, the same names as in the
+  other CEXY SDKs.
+
+### Fixed
+- **WebSocket subscribe refusals, every channel (spot and futures).** The server answers a
+  partly refused `subscribe` with an `error` frame per refused channel (carrying the request id)
+  BEFORE the single `subscribed` ack, and with no ack when nothing was accepted. The client used
+  to fail the whole request on the first error frame and ignore the ack, so accepted channels
+  were not recorded. It now collects the errors and completes on the ack, once every channel has
+  been refused, or on a timeout after at least one error (all refused). `subscribe()` returns the
+  accepted channels plus the refused ones with their errors (`refused`, `errors`; also a
+  `subscribe_refused` event) and raises `SubscribeRefusedError` only when every channel sent was
+  refused (`TIMEOUT`/`DISCONNECTED` when no error arrived). Errors pair with the channels missing
+  from the ack in sent order (spot names as the server canonicalises them: case-insensitive, `_`
+  read as `/` in the symbol; futures names exactly; the last error covers any rest). An error frame
+  is attributed only to the request whose id it carries. Refused channels are not held and not retried. A batch is still sent as one
+  frame.
+- **WebSocket subscribe contract (cexy-api-spec `ace4a5e`).** Ack names now match with the channel
+  KIND exact: only the spot market symbol is canonicalised (trimmed, upper-cased, `_` read as `/`),
+  so `Ticker:BTC/USDT` is no longer taken for `ticker:BTC/USDT` (it used to case-fold the kind and
+  could pair an ack name with the wrong sent channel). Two spellings of one channel in a request,
+  or a channel already held under another spelling, are sent once; ack names are matched as a
+  multiset (the ack can repeat a name) and each accepted name is returned once. Events that arrive
+  before the ack and id-less error frames (`CONCURRENT_MODIFICATION`) are covered by conformance:
+  events are delivered and id-less errors are never attributed to a subscribe.
+- **Held channel names (cexy-api-spec `6cea8f0`, rule 13).** An accepted channel is held under the
+  server's canonical name from the ack (`ticker:btc_usdt` is held as `ticker:BTC/USDT`), so held
+  names match event channels. A channel held as sent after a `TIMEOUT` is now held under the
+  canonical name once a re-subscribe is acked (it used to be held under both), and is re-sent under
+  it. `unsubscribe` finds a held channel under any spelling the server canonicalises alike.
+- **Re-subscribes after a reconnect or a re-auth:** every refusal is reported (`subscribe_refused`);
+  a private channel refused `UNAUTHENTICATED` goes back to pending (subscribed after the next
+  successful auth) and any other refusal drops the channel, instead of putting every channel back to pending (re-auth) or failing
+  the whole restore (reconnect).
+
+### Changed
+- A WebSocket `subscribe` that gets no ack and no error within `request_timeout` still raises
+  `TIMEOUT`, but its channels now stay held, so a reconnect sends them again.
+- `WebSocketClient(ping_interval=...)` must be at most 60 s (the server closes a connection whose
+  client has been silent for 90-120 s); a larger value raises `ValueError`.
+
 ## 0.1.0.dev11 (2026-10-01)
 
 ### Changed

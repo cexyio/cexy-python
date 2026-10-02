@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, List, Literal, Optional, Union, overload
+from typing import Any, AsyncIterator, List, Literal, Optional, Union, overload
 
 from cexy._async.pagination import AsyncPage
 from cexy._async.transport import AsyncTransport
@@ -18,7 +18,14 @@ from cexy._common import AUTO
 from cexy._decimal import DecimalLike, to_wire, to_wire_opt
 from cexy._generated import models as m
 from cexy._opmap import operation
-from cexy.errors import CexyApiError, CexyConnectionError, NotFoundError, RateLimitError
+from cexy.errors import (
+    CexyApiError,
+    CexyConnectionError,
+    NotFoundError,
+    PagingCursorRepeatedError,
+    PagingStalledError,
+    RateLimitError,
+)
 
 DateLike = Union[datetime, str]
 Direction = Union[m.SortDirection, str]
@@ -587,6 +594,140 @@ class AsyncTrading(_Resource):
     async def _cancel_all_once(self, symbol: Optional[str], max_retries: Optional[int] = None) -> m.CancelAllResponse:
         payload = await self._t.request("cancel_all", body={"symbol": symbol}, max_retries=max_retries)
         return m.CancelAllResponse.model_validate(_data(payload))
+
+
+class AsyncFutures(_Resource):
+    """Futures data, read only. Market data is public; the account's own positions, orders,
+    fills and funding need a key with ``read`` (requests are signed like every private call).
+
+    Every response carries ``as_of`` (when the data arrived from the provider) and ``stale``.
+    For books and trades ``stale`` is the live feed's health, not the data's age. When nothing
+    usable is cached the server answers 503 ``SERVICE_UNAVAILABLE`` (retryable,
+    ``details.reason`` ``futures_data_unavailable``, with ``Retry-After``), retried like any
+    503. Without a futures account the account reads answer ``has_account=False``.
+    """
+
+    @operation("markets")
+    async def markets(self) -> m.FuturesMarketsResponse:
+        """Every listed futures market and its current figures (public)."""
+        payload = await self._t.request("markets")
+        return m.FuturesMarketsResponse.model_validate(_data(payload))
+
+    @operation("market")
+    async def market(self, coin: str) -> m.FuturesMarketResponse:
+        """One futures market, e.g. ``"BTC"`` (public)."""
+        payload = await self._t.request("market", path={"coin": coin})
+        return m.FuturesMarketResponse.model_validate(_data(payload))
+
+    @operation("orderbook")
+    async def order_book(self, coin: str, depth: Optional[int] = None) -> m.FuturesBookResponse:
+        """The book, up to 20 levels a side (public)."""
+        payload = await self._t.request("orderbook", path={"coin": coin}, query={"depth": depth})
+        return m.FuturesBookResponse.model_validate(_data(payload))
+
+    @operation("candles")
+    async def candles(self, coin: str, interval: str, *, before: Optional[int] = None) -> m.FuturesCandlesResponse:
+        """500 candles (public): the latest, or the window holding ``before`` (epoch milliseconds)."""
+        payload = await self._t.request("candles", path={"coin": coin}, query={"interval": interval, "before": before})
+        return m.FuturesCandlesResponse.model_validate(_data(payload))
+
+    @operation("trades")
+    async def trades(self, coin: str, *, limit: Optional[int] = None) -> m.FuturesTradesResponse:
+        """Recent public trades, at most 100 (public)."""
+        payload = await self._t.request("trades", path={"coin": coin}, query={"limit": limit})
+        return m.FuturesTradesResponse.model_validate(_data(payload))
+
+    @operation("positions")
+    async def positions(self) -> m.FuturesPositionsResponse:
+        """The margin summary and open positions (``read``). ``has_account`` is False, with no
+        positions, when the account has no futures account."""
+        payload = await self._t.request("positions")
+        return m.FuturesPositionsResponse.model_validate(_data(payload))
+
+    @operation("open_orders")
+    async def open_orders(self) -> m.FuturesOpenOrdersResponse:
+        """The account's open futures orders (``read``)."""
+        payload = await self._t.request("open_orders")
+        return m.FuturesOpenOrdersResponse.model_validate(_data(payload))
+
+    @operation("fills")
+    async def fills(self, *, cursor: Optional[str] = None) -> m.FuturesFillsResponse:
+        """One page of fills, newest first, 100 a page, 30 days back (``read``).
+
+        A page may be short, even empty, and still carry a ``next_cursor``: keep paging until it
+        is None, passing it back exactly as given. :meth:`iter_fills` does this for you."""
+        payload = await self._t.request("fills", query={"cursor": cursor})
+        return m.FuturesFillsResponse.model_validate(_data(payload))
+
+    @operation("funding")
+    async def funding(self, *, cursor: Optional[str] = None) -> m.FuturesFundingResponse:
+        """One page of funding payments, paged like :meth:`fills` (``read``).
+        :meth:`iter_funding` walks every page."""
+        payload = await self._t.request("funding", query={"cursor": cursor})
+        return m.FuturesFundingResponse.model_validate(_data(payload))
+
+    async def iter_fills(self, *, max_busy_retries: int = 3) -> AsyncIterator[m.FuturesFill]:
+        """Every fill, newest first, across all pages, fetched lazily (shared conformance:
+        futures/history_paging.json).
+
+        The first request sends no cursor; each ``next_cursor`` is sent back verbatim until it is
+        None. A short or empty page with a new cursor is normal. An EMPTY page whose
+        ``next_cursor`` equals the cursor just sent means the provider is busy: wait (the
+        transport's backoff) and ask for the same cursor again, at most ``max_busy_retries`` times
+        in a row, then raise :class:`~cexy.PagingStalledError` (``PAGING_STALLED``, retryable).
+        ``max_busy_retries`` is independent of the client's ``max_retries`` (request retries), so
+        a client with retries disabled still rides out a busy provider. A page WITH rows whose
+        ``next_cursor`` equals the cursor just sent is a server fault: its rows are yielded, then
+        :class:`~cexy.PagingCursorRepeatedError` (``PAGING_CURSOR_REPEATED``, not retryable) is
+        raised. After either error the rows already yielded are not the complete history.
+        ``has_account`` False ends with no rows.
+        """
+        async for row in self._history("fills", max_busy_retries):
+            yield row
+
+    async def iter_funding(self, *, max_busy_retries: int = 3) -> AsyncIterator[m.Funding]:
+        """Every funding payment, newest first, across all pages; the same rules as
+        :meth:`iter_fills`."""
+        async for row in self._history("funding", max_busy_retries):
+            yield row
+
+    async def _history(self, kind: str, max_busy_retries: int) -> AsyncIterator[Any]:
+        if max_busy_retries < 0:
+            raise ValueError("max_busy_retries must be >= 0")
+        path = f"GET /api/v1/futures/{kind}"
+        cursor: Optional[str] = None
+        busy = 0
+        rows: List[Any]
+        while True:
+            if kind == "fills":
+                fills = await self.fills(cursor=cursor)
+                has_account, rows, next_cursor = fills.has_account, list(fills.fills), fills.next_cursor
+            else:
+                funding = await self.funding(cursor=cursor)
+                has_account, rows, next_cursor = funding.has_account, list(funding.funding), funding.next_cursor
+            if not has_account:
+                return
+            repeated = cursor is not None and next_cursor == cursor
+            if repeated and not rows:
+                if busy >= max_busy_retries:
+                    raise PagingStalledError(
+                        f"{path}: the provider stayed busy; the same page came back empty {busy + 1} times in a row",
+                        cursor=next_cursor or "",
+                        retries=busy,
+                    )
+                await self._t._sleep(self._t.policy.backoff(busy))
+                busy += 1
+                continue
+            busy = 0
+            for row in rows:
+                yield row
+            if repeated:
+                raise PagingCursorRepeatedError(
+                    f"{path}: a page with rows repeated the cursor that was sent; stopping", cursor=next_cursor or ""
+                )
+            if next_cursor is None:
+                return
+            cursor = next_cursor
 
 
 def _enum_value(value: Any) -> Any:

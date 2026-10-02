@@ -8,7 +8,7 @@ Typed Python client for the [CEXY.io](https://cexy.io) exchange REST and WebSock
 - Client-side rate limiting, cursor pagination
 - WebSocket client with heartbeat, reconnect and a self-syncing order book
 
-> Status: **0.1.0.dev11, pre-release.** The API may change before 1.0 (see [Versioning](#versioning)).
+> Status: **0.1.0.dev12, pre-release.** The API may change before 1.0 (see [Versioning](#versioning)).
 > Pre-releases need `--pre`: `pip install --pre cexy`.
 
 ## Install
@@ -174,6 +174,8 @@ message.
 | `UnprocessableError` | 422, e.g. `INSUFFICIENT_FUNDS`, `MARKET_UNAVAILABLE` |
 | `RateLimitError` | 429; `.retry_after` gives the server's requested wait |
 | `ServerError` | 5xx, e.g. `UNDER_MAINTENANCE`, `ENGINE_OVERLOADED` |
+| `PagingStalledError` | local, `PAGING_STALLED`: a futures history iterator gave up on a busy provider (retryable) |
+| `PagingCursorRepeatedError` | local, `PAGING_CURSOR_REPEATED`: a futures history page with rows repeated its cursor (not retryable) |
 
 An error code this SDK version does not know is raised as the base `CexyApiError`: it never
 crashes the client. Network failures after retries raise `CexyConnectionError`. Calling a
@@ -232,6 +234,61 @@ next_page = page.next_page()               # None on the last page
 
 With `AsyncClient`: `async for order in page.auto_paging_iter(): ...`.
 
+## Futures data (read only)
+
+`client.futures` reads futures market data and the account's own futures data. Nothing here
+places or changes anything.
+
+**Public market data** (no key needed):
+
+```python
+markets = client.futures.markets()                 # every listed market and its figures
+btc = client.futures.market("BTC").market
+book = client.futures.order_book("BTC", depth=10)  # up to 20 levels a side
+candles = client.futures.candles("BTC", "1h")      # 500 candles; before=<epoch ms> for older
+trades = client.futures.trades("BTC", limit=50)    # at most 100, side/price/size/time only
+```
+
+**Account data** needs a key with the `read` scope (requests are signed like every private
+call):
+
+```python
+client = cexy.Client(api_key="...", api_secret="...")
+pos = client.futures.positions()      # margin summary and open positions
+orders = client.futures.open_orders()
+for fill in client.futures.iter_fills():        # every fill, newest first, 30 days back
+    print(fill.id, fill.coin, fill.side, fill.price, fill.size)
+for payment in client.futures.iter_funding():   # every funding payment
+    print(payment.coin, payment.amount)
+```
+
+- Every response carries `as_of` (when the data arrived) and `stale`. For books and trades
+  `stale` is the live feed's health, not the data's age: a quiet book can be unchanged and
+  current.
+- Without a futures account the account reads answer `has_account=False` (no error);
+  `iter_fills()`/`iter_funding()` then yield nothing.
+- Prices and sizes are `Decimal`.
+- `fills(cursor=...)` and `funding(cursor=...)` return one page (`has_account`, the rows,
+  `next_cursor`). Paging rules, which `iter_fills()`/`iter_funding()` follow for you: the first
+  request sends no cursor; the cursor is opaque text, sent back exactly as given; a page can be
+  short, even empty, and still have a `next_cursor`, so keep going until it is `None`. An
+  empty page whose `next_cursor` equals the cursor just sent means the provider is busy: the
+  iterator waits (the normal retry backoff) and asks for the same cursor again, up to
+  `max_busy_retries` times in a row (default 3; independent of the client's `max_retries`), then
+  raises `PagingStalledError` (code `PAGING_STALLED`, a local error, retryable): start again
+  later. A page *with* rows that repeats the cursor just sent is a server fault: its rows are
+  yielded, then `PagingCursorRepeatedError` (`PAGING_CURSOR_REPEATED`, not retryable) is raised
+  instead of looping. After either error the rows already yielded are not the complete history;
+  both errors carry the cursor in `details["cursor"]`. A retryable error between pages (e.g. 503
+  with `Retry-After`) is retried for the same cursor by the client's normal retry policy, and
+  paging continues. Rows are `FuturesFill` and `Funding` models (funding rows have no id).
+- When nothing usable is cached and the provider cannot be read, the server answers 503
+  `SERVICE_UNAVAILABLE` with `details["reason"] == "futures_data_unavailable"` and a
+  `Retry-After` (1 to 30 s). It is retryable: the client retries it like any 503 and then
+  raises `ServerError`.
+
+With `AsyncClient` every method is awaited, and the iterators are `async for`.
+
 ## Rate limits
 
 Server-side limits:
@@ -278,6 +335,25 @@ The client handles the protocol rules for you:
   (`authenticated`, `subscribed`, `unsubscribed`, `pong`). An `error` acknowledgement, or none
   within `request_timeout`, raises `cexy.ws.WebSocketError`. `await ws.ping()` returns the
   round-trip time.
+- **Subscribe refusals.** The server refuses channels one by one: an `error` frame with the
+  request's id for each refused channel, then one `subscribed` ack listing the accepted ones (no
+  ack at all when none was accepted). `subscribe()` collects them and returns the accepted
+  channels in `added` and the refused ones in `refused`, with each server error in `errors`; every
+  refusal is also emitted as a `subscribe_refused` event. Refused channels are not held and never
+  retried automatically (error frames carry no retry hint: back off yourself, about 60 s after
+  `RATE_LIMITED`). Only when every channel sent was refused does it raise
+  `SubscribeRefusedError` (a `WebSocketError` with the first error's `code`, and `.result`). A
+  timeout counts as "all refused" once at least one error frame has arrived; with no ack and no
+  error it raises `TIMEOUT` and the channels stay held, so a reconnect sends them again. Errors
+  pair with the channels missing from the ack, in the order sent (spot names compared the way the
+  server canonicalises them, ignoring case and reading `_` as `/` in the symbol, so
+  `ticker:btc_usdt` acknowledged as `ticker:BTC/USDT` is accepted; futures names exactly); if there are fewer errors than
+  missing channels (the server stops at its 100-subscription limit), the last error covers the
+  rest.
+- **Re-subscribing by itself** (after a reconnect, a re-auth, or `futures.resync` on
+  `futures.account`): every refusal is reported as `subscribe_refused`. A private channel refused
+  `UNAUTHENTICATED` goes back to pending and is subscribed after the next successful auth; any
+  other refusal drops the channel.
 - Unknown event types are ignored; an unknown `protocol_version` logs one warning.
 - You can register callbacks with `ws.on("trade.new", handler)` instead of iterating.
 
@@ -295,7 +371,7 @@ The client handles the protocol rules for you:
 6. A `CONCURRENT_MODIFICATION` error frame (messages were dropped) triggers a fresh snapshot
    of every book and a `resync` event, so you can refresh other state too.
 
-**Private channels** (`orders`, `balances`, `deposits`, `withdrawals`, `account`) need
+**Private channels** (`orders`, `balances`, `deposits`, `withdrawals`, `account`, `futures.account`) need
 `await ws.auth(token)` with a session access token; it returns once the server sends
 `authenticated`. With an API key, use `await ws.auth_key()` on a WebSocket built from a
 client with your key (see [Request signing](#request-signing)). If the session is revoked, the `account` channel delivers `session.revoked` and the
@@ -320,6 +396,51 @@ are skipped (after a short reorder window, `reorder_window=0.25` seconds by defa
 emits `sequence_gap` and `resync` with `{"reason": "sequence_gap", "channel": ...}`: refetch that
 channel's state over REST. `balances.resync`, `deposits.resync` and `withdrawals.resync` (the last
 two planned) emit `resync` with `balances_resync`, `deposits_resync` or `withdrawals_resync`.
+
+### Futures channels
+
+```python
+import cexy
+from cexy import ws as cws
+
+async with cws.WebSocketClient(rest=cexy.AsyncClient(api_key="...", api_secret="...")) as ws:
+    await ws.auth_key()                               # only futures.account needs it
+    res = await ws.subscribe(
+        cws.futures_mids(),                           # futures.mids
+        cws.futures_orderbook("BTC"),                 # futures.orderbook:BTC
+        cws.futures_candles("BTC", "1m"),             # futures.candles:BTC:1m
+        cws.futures_account(),                        # futures.account (private)
+    )
+    for channel, err in res.errors.items():           # refused by the server: not retried
+        print("refused", channel, err.code)
+    async for event in ws:
+        if event.type == "futures.orderbook.update":
+            best_bid = event.data["bids"][0]          # {"price": "...", "size": "..."}
+        elif event.type == cws.RESYNC and event.channel:
+            ...                                       # refetch that channel over REST
+```
+
+- Channels: `futures.mids`, `futures.orderbook:{coin}`, `futures.trades:{coin}`,
+  `futures.candles:{coin}:{interval}` (`1m 5m 15m 1h 4h 1d`), `futures.status`, and the private
+  `futures.account` (`futures.positions` and `futures.orders`, full state on subscribe and on
+  change). The coin is case-sensitive and sent exactly as `GET /api/v1/futures/markets` lists
+  it (1-20 ASCII letters or digits). The helpers (and `subscribe()` for any `futures.*` string)
+  check names locally: a bad one raises `cexy.ws.ChannelNameError` (code `CONFIG`, a
+  `ValueError`) and nothing is sent.
+- Public futures channels send **no snapshot** on subscribe: seed from REST (`client.futures`).
+  Book levels are `{price, size}` objects; book, mids, positions and orders frames are complete
+  replacements. Public futures channels are not gap-tracked.
+- `futures.account` subscribed before `auth`/`auth_key` succeeds is held (`res.held`,
+  `ws.pending_channels`) and subscribed once the connection is authenticated.
+- `futures.resync` (`data: {}`) is delivered as an event, followed by `resync` with
+  `{"reason": "futures_resync", "channel": ...}`: refetch that channel over REST. On
+  `futures.account` the server's poller has stopped, so the client also unsubscribes and
+  subscribes again by itself; if that subscribe is refused (e.g. `NOT_FOUND` "No futures
+  account") the channel is dropped and a `subscribe_refused` event reports it.
+- Refusals (`RATE_LIMITED`, `NOT_FOUND`, `VALIDATION_FAILED`, `SERVICE_UNAVAILABLE`) follow the
+  subscribe-refusal rules above: listed in `res.refused` / `res.errors`, emitted as
+  `subscribe_refused`, **not retried automatically**.
+- `ping_interval` may be at most 60 s (default 30 s).
 
 ### Request signing
 

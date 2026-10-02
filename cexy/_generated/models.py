@@ -302,6 +302,54 @@ class FeeScheduleResponse(BaseModel):
     tier: Annotated[int, Field(description="Tier index.", ge=0)]
 
 
+class Funding(BaseModel):
+    """
+    One funding payment.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    amount: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    coin: Annotated[str, Field(description="Coin.")]
+    position_size: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    rate: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    time: Annotated[int, Field(description="When, unix milliseconds.")]
+
+
+class FuturesFundingResponse(BaseModel):
+    """
+    A page of the account's funding payments.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    funding: Annotated[List[Funding], Field(description="Newest first.")]
+    has_account: Annotated[bool, Field(description="Whether the account has a futures account.")]
+    next_cursor: Annotated[
+        Optional[str],
+        Field(
+            description="Pass as `cursor` for older payments, exactly as given; `null` at the end (30 days back). Opaque."
+        ),
+    ] = None
+
+
 class HeldIncomingResponse(BaseModel):
     """
     An internal transfer credited to `locked` and not yet available.
@@ -470,6 +518,28 @@ class LedgerEntryResponse(BaseModel):
     sequence: Annotated[int, Field(description="Position in this account's history for this asset.")]
 
 
+class Level(BaseModel):
+    """
+    One price level.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    price: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    size: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+
+
 class LiquidityRole(OpenEnum):
     """
     Whether a fill added liquidity (maker) or removed it (taker).
@@ -603,6 +673,49 @@ class NotificationResponse(BaseModel):
     title: Annotated[str, Field(description="Short heading.")]
 
 
+class OpenOrder(BaseModel):
+    """
+    One open order.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    coin: Annotated[str, Field(description="Coin.")]
+    id: Annotated[str, Field(description="Our id for it, stable across reads.")]
+    order_type: Annotated[
+        str,
+        Field(description="The order type as the provider names it (`Limit`, `Stop Market`, ...)."),
+    ]
+    original_size: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    placed_at: Annotated[int, Field(description="When placed, unix milliseconds.")]
+    price: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    reduce_only: Annotated[bool, Field(description="Whether it may only reduce a position.")]
+    side: Annotated[str, Field(description="`buy` or `sell`.")]
+    size: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    trigger_price: Annotated[
+        Optional[Decimal],
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ] = None
+
+
 class OrderBookResponse(BaseModel):
     """
     One side of the order book, aggregated by price.
@@ -682,6 +795,61 @@ class PasswordRules(BaseModel):
     min_length: Annotated[int, Field(description="Minimum length in characters.", ge=0)]
 
 
+class PerpMarket(BaseModel):
+    """
+    One listed perpetual market and its current figures.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    coin: Annotated[str, Field(description="The provider's coin name, e.g. `BTC` or `kPEPE`.")]
+    funding_rate: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    mark_price: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    max_leverage: Annotated[int, Field(description="The highest leverage allowed.", ge=0)]
+    mid_price: Annotated[
+        Optional[Decimal],
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ] = None
+    open_interest: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    oracle_price: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    price_24h_ago: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    size_decimals: Annotated[int, Field(description="Decimal places a size may have.", ge=0)]
+    volume_24h: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+
+
 class PoolStatus(OpenEnum):
     """
     Whether a pool quotes, and whether it accepts new liquidity.
@@ -690,6 +858,102 @@ class PoolStatus(OpenEnum):
     ACTIVE = "active"
     PAUSED = "paused"
     CLOSING = "closing"
+
+
+class Position(BaseModel):
+    """
+    One open position.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    coin: Annotated[str, Field(description="Coin.")]
+    entry_price: Annotated[
+        Optional[Decimal],
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ] = None
+    funding_since_open: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    leverage: Annotated[int, Field(description="Leverage.", ge=0)]
+    leverage_type: Annotated[str, Field(description="`cross` or `isolated`.")]
+    liquidation_price: Annotated[
+        Optional[Decimal],
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ] = None
+    margin_used: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    position_value: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    return_on_equity: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    size: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    unrealized_pnl: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+
+
+class Positions(BaseModel):
+    """
+    A margin summary and the open positions.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    account_value: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    maintenance_margin: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    margin_used: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    positions: Annotated[List[Position], Field(description="The open positions.")]
+    total_notional: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
 
 
 class PublicTradeResponse(BaseModel):
@@ -835,6 +1099,111 @@ class WithdrawalStatus(OpenEnum):
     FAILED = "failed"
     BROADCAST_UNKNOWN = "broadcast_unknown"
     REVERTED = "reverted"
+
+
+class FuturesCandle(BaseModel):
+    """
+    One candle.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    close: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    close_time: Annotated[int, Field(description="Close time, unix milliseconds.")]
+    high: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    low: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    open: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    open_time: Annotated[int, Field(description="Open time, unix milliseconds.")]
+    trades: Annotated[int, Field(description="Number of trades.", ge=0)]
+    volume: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+
+
+class FuturesFill(BaseModel):
+    """
+    One fill.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    closed_pnl: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    coin: Annotated[str, Field(description="Coin.")]
+    direction: Annotated[
+        str,
+        Field(description="The provider's description of the fill's effect (`Open Long`, `Close Short`, ...)."),
+    ]
+    id: Annotated[str, Field(description="Our id for it.")]
+    order_id: Annotated[str, Field(description="Our id for its order.")]
+    price: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    side: Annotated[str, Field(description="`buy` or `sell`.")]
+    size: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    taker: Annotated[bool, Field(description="Whether this fill took liquidity.")]
+    time: Annotated[int, Field(description="When, unix milliseconds.")]
+
+
+class FuturesPublicTrade(BaseModel):
+    """
+    A public trade, with nothing that identifies the parties.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    price: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    side: Annotated[str, Field(description="`buy` or `sell`: the taker's side.")]
+    size: Annotated[
+        Decimal,
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ]
+    time: Annotated[int, Field(description="When, unix milliseconds.")]
 
 
 class LedgerReferenceDeposit(BaseModel):
@@ -1393,6 +1762,144 @@ class FillResponse(BaseModel):
     symbol: Annotated[str, Field(description="Market symbol.")]
     timestamp: Annotated[AwareDatetime, Field(description="When it executed.")]
     trade_id: Annotated[str, Field(description="Trade id.")]
+
+
+class FuturesBookResponse(BaseModel):
+    """
+    A futures market's book.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    as_of: Annotated[AwareDatetime, Field(description="When the provider last sent it.")]
+    asks: Annotated[List[Level], Field(description="Asks, best first.")]
+    bids: Annotated[List[Level], Field(description="Bids, best first.")]
+    coin: Annotated[str, Field(description="Coin.")]
+    stale: Annotated[
+        bool,
+        Field(description="The live feed is not healthy: the book may be out of date."),
+    ]
+
+
+class FuturesCandlesResponse(BaseModel):
+    """
+    A futures market's candles.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    as_of: Annotated[AwareDatetime, Field(description="When read.")]
+    candles: Annotated[List[FuturesCandle], Field(description="Candles, oldest first.")]
+    coin: Annotated[str, Field(description="Coin.")]
+    interval: Annotated[str, Field(description="Interval.")]
+    stale: Annotated[bool, Field(description="Older than it should be.")]
+
+
+class FuturesFillsResponse(BaseModel):
+    """
+    A page of the account's fills.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    fills: Annotated[
+        List[FuturesFill],
+        Field(
+            description="Newest first; fills sharing a millisecond in a fixed order. A page may be short of 100 and still be followed by more."
+        ),
+    ]
+    has_account: Annotated[bool, Field(description="Whether the account has a futures account.")]
+    next_cursor: Annotated[
+        Optional[str],
+        Field(
+            description="Pass as `cursor` for older fills, exactly as given; `null` at the end (30 days back). Opaque: it may carry more than a time."
+        ),
+    ] = None
+
+
+class FuturesMarketResponse(BaseModel):
+    """
+    One futures market.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    as_of: Annotated[AwareDatetime, Field(description="When this data was read.")]
+    market: PerpMarket
+    stale: Annotated[bool, Field(description="Older than it should be.")]
+
+
+class FuturesMarketsResponse(BaseModel):
+    """
+    Every listed futures market.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    as_of: Annotated[
+        AwareDatetime,
+        Field(description="When this data was read from the futures provider."),
+    ]
+    markets: Annotated[
+        List[PerpMarket],
+        Field(description="The markets, in the provider's order. Delisted markets are not included."),
+    ]
+    stale: Annotated[
+        bool,
+        Field(description="The data is older than it should be: the provider could not be read just now."),
+    ]
+
+
+class FuturesOpenOrdersResponse(BaseModel):
+    """
+    The account's open orders.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    as_of: Annotated[Optional[AwareDatetime], Field(description="When read.")] = None
+    has_account: Annotated[bool, Field(description="Whether the account has a futures account.")]
+    orders: Annotated[List[OpenOrder], Field(description="The open orders.")]
+    stale: Annotated[bool, Field(description="Older than it should be.")]
+
+
+class FuturesPositionsResponse(BaseModel):
+    """
+    The account's positions.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    as_of: Annotated[Optional[AwareDatetime], Field(description="When read.")] = None
+    has_account: Annotated[
+        bool,
+        Field(description="Whether the account has a futures account. Without one, nothing else is meaningful."),
+    ]
+    positions: Optional[Positions] = None
+    stale: Annotated[bool, Field(description="Older than it should be.")]
+
+
+class FuturesTradesResponse(BaseModel):
+    """
+    A futures market's recent public trades.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    coin: Annotated[str, Field(description="Coin.")]
+    stale: Annotated[
+        bool,
+        Field(description="The live feed is not healthy, or was only just opened: trades may be missing."),
+    ]
+    trades: Annotated[List[FuturesPublicTrade], Field(description="Newest first.")]
 
 
 class MarketResponse(BaseModel):

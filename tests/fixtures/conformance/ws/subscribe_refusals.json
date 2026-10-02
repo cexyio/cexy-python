@@ -1,0 +1,336 @@
+{
+  "description": "Subscribe refusal handling (all channels, spot and futures). The server answers a subscribe frame (one id) channel by channel: an error frame per refused channel (carrying the request id, no channel name), then ONE `subscribed` ack listing the accepted channels in canonical form, or NO ack if nothing was accepted. Errors come before the ack. Client rules: (1) collect error frames by request id; (2) the request completes on its ack, or as soon as it has one error per channel sent, or at the ack timeout; (3) refused channels = the channels sent that are missing from the ack, in the order sent, paired with the errors in arrival order; if there are fewer errors than refused channels (the server stops processing at its 100-subscription limit with one error), the last error covers the rest; (4) ack names are matched with the server's canonicalisation: the whole name is trimmed; channel KINDS match exactly (`Ticker:BTC/USDT` is refused VALIDATION_FAILED); a spot MARKET symbol is trimmed, uppercased and `_` becomes `/` (`btc_usdt` \u2192 `BTC/USDT`); futures names exactly (coins are case-sensitive). The ack can repeat a name (a channel already held, or two spellings of one channel in the request, are both acked): match ack names as a multiset, and preferably drop duplicates that canonicalise alike before sending; (5) the call fails only if every channel sent was refused; otherwise it returns accepted + refused-with-errors; (6) timeout with at least one error = all unacknowledged channels refused; timeout with no error and no ack = TIMEOUT, channels stay held; (7) an error frame whose id belongs to ANOTHER in-flight request is attributed only to that request; (8) refused channels are not held and not retried; on re-subscribe after reconnect/re-auth a private channel refused UNAUTHENTICATED goes back to pending, any other refusal drops the channel and is reported. (9) the server checks each channel in this order: parse (VALIDATION_FAILED), private without auth (UNAUTHENTICATED), the 100-subscription limit (one RATE_LIMITED, then it STOPS: later channels get nothing), market/source checks (NOT_FOUND, RATE_LIMITED, UNAUTHENTICATED), already held (acked), accepted; (10) events for a channel in an in-flight subscribe can arrive BEFORE its ack: deliver them, never drop them; (11) error frames with no id (CONCURRENT_MODIFICATION per lagged subscription, sign-in lockout, closing) are never subscribe answers: never attribute them to a request; the client always sends an id with subscribe; (12) match error CODES only: message texts are not part of the contract. Server-guaranteed (backend 6919535): one subscribe frame is processed to completion before the next client frame; errors in send order, all before the single ack, on one ordered queue; no ack if nothing was accepted; the ack lists accepted names in canonical form, in send order; every answer carries the request id. Not guaranteed: message texts. (13) an accepted channel is held, reported and re-sent after reconnect under the server's canonical name from the ack (e.g. `ticker:btc_usdt` is held as `ticker:BTC/USDT`), so held names match event channels.",
+  "cases": [
+    {
+      "id": "partly_refused_spot_batch",
+      "send": [
+        "ticker:BTC/USDT",
+        "ticker:NOPE/USDT",
+        "orderbook:ETH/USDT"
+      ],
+      "server": [
+        {
+          "type": "error",
+          "code": "NOT_FOUND",
+          "message": "(any text)"
+        },
+        {
+          "type": "subscribed",
+          "channels": [
+            "ticker:BTC/USDT",
+            "orderbook:ETH/USDT"
+          ]
+        }
+      ],
+      "expect": {
+        "added": [
+          "ticker:BTC/USDT",
+          "orderbook:ETH/USDT"
+        ],
+        "refused": {
+          "ticker:NOPE/USDT": "NOT_FOUND"
+        },
+        "fails": false
+      }
+    },
+    {
+      "id": "spot_canonicalised_in_ack",
+      "send": [
+        "ticker:btc_usdt",
+        "ticker:nope_usdt"
+      ],
+      "server": [
+        {
+          "type": "error",
+          "code": "NOT_FOUND",
+          "message": "(any text)"
+        },
+        {
+          "type": "subscribed",
+          "channels": [
+            "ticker:BTC/USDT"
+          ]
+        }
+      ],
+      "expect": {
+        "added": [
+          "ticker:BTC/USDT"
+        ],
+        "refused": {
+          "ticker:nope_usdt": "NOT_FOUND"
+        },
+        "fails": false,
+        "held_after": [
+          "ticker:BTC/USDT"
+        ]
+      }
+    },
+    {
+      "id": "futures_coin_case_sensitive",
+      "send": [
+        "futures.orderbook:BTC",
+        "futures.orderbook:btc"
+      ],
+      "server": [
+        {
+          "type": "error",
+          "code": "NOT_FOUND",
+          "message": "Futures market not found"
+        },
+        {
+          "type": "subscribed",
+          "channels": [
+            "futures.orderbook:BTC"
+          ]
+        }
+      ],
+      "expect": {
+        "added": [
+          "futures.orderbook:BTC"
+        ],
+        "refused": {
+          "futures.orderbook:btc": "NOT_FOUND"
+        },
+        "fails": false
+      }
+    },
+    {
+      "id": "all_refused_no_ack",
+      "send": [
+        "futures.trades:BTC",
+        "futures.trades:ETH"
+      ],
+      "server": [
+        {
+          "type": "error",
+          "code": "RATE_LIMITED",
+          "message": "Too many new futures market subscriptions. Please retry shortly."
+        },
+        {
+          "type": "error",
+          "code": "RATE_LIMITED",
+          "message": "Too many new futures market subscriptions. Please retry shortly."
+        }
+      ],
+      "expect": {
+        "added": [],
+        "refused": {
+          "futures.trades:BTC": "RATE_LIMITED",
+          "futures.trades:ETH": "RATE_LIMITED"
+        },
+        "fails": true,
+        "completes_before_timeout": true
+      }
+    },
+    {
+      "id": "limit_stop_last_error_covers_rest",
+      "send": [
+        "ticker:A/USDT",
+        "ticker:B/USDT",
+        "ticker:C/USDT"
+      ],
+      "server": [
+        {
+          "type": "error",
+          "code": "RATE_LIMITED",
+          "message": "This connection may hold at most 100 subscriptions."
+        },
+        {
+          "type": "subscribed",
+          "channels": [
+            "ticker:A/USDT"
+          ]
+        }
+      ],
+      "expect": {
+        "added": [
+          "ticker:A/USDT"
+        ],
+        "refused": {
+          "ticker:B/USDT": "RATE_LIMITED",
+          "ticker:C/USDT": "RATE_LIMITED"
+        },
+        "fails": false
+      }
+    },
+    {
+      "id": "error_for_other_request_not_misattributed",
+      "concurrent": [
+        {
+          "request": "r1",
+          "send": [
+            "ticker:BTC/USDT"
+          ]
+        },
+        {
+          "request": "r2",
+          "send": [
+            "ticker:NOPE/USDT"
+          ]
+        }
+      ],
+      "server": [
+        {
+          "to": "r2",
+          "frame": {
+            "type": "error",
+            "code": "NOT_FOUND",
+            "message": "(any text)"
+          }
+        },
+        {
+          "to": "r1",
+          "frame": {
+            "type": "subscribed",
+            "channels": [
+              "ticker:BTC/USDT"
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "r1": {
+          "added": [
+            "ticker:BTC/USDT"
+          ],
+          "refused": {},
+          "fails": false
+        },
+        "r2": {
+          "added": [],
+          "refused": {
+            "ticker:NOPE/USDT": "NOT_FOUND"
+          },
+          "fails": true
+        }
+      }
+    },
+    {
+      "id": "timeout_without_answer",
+      "send": [
+        "ticker:BTC/USDT"
+      ],
+      "server": [],
+      "expect": {
+        "error_code": "TIMEOUT",
+        "held_after": [
+          "ticker:BTC/USDT"
+        ]
+      }
+    },
+    {
+      "id": "channel_kind_is_exact",
+      "send": [
+        "Ticker:BTC/USDT",
+        "ticker:BTC/USDT"
+      ],
+      "server": [
+        {
+          "type": "error",
+          "code": "VALIDATION_FAILED",
+          "message": "(any text)"
+        },
+        {
+          "type": "subscribed",
+          "channels": [
+            "ticker:BTC/USDT"
+          ]
+        }
+      ],
+      "expect": {
+        "added": [
+          "ticker:BTC/USDT"
+        ],
+        "refused": {
+          "Ticker:BTC/USDT": "VALIDATION_FAILED"
+        },
+        "fails": false
+      }
+    },
+    {
+      "id": "same_channel_two_spellings_acked_twice",
+      "send": [
+        "ticker:btc_usdt",
+        "ticker:BTC/USDT"
+      ],
+      "server": [
+        {
+          "type": "subscribed",
+          "channels": [
+            "ticker:BTC/USDT",
+            "ticker:BTC/USDT"
+          ]
+        }
+      ],
+      "expect": {
+        "refused": {},
+        "fails": false,
+        "held_after": [
+          "ticker:BTC/USDT"
+        ],
+        "note": "a client that drops the duplicate before sending sends one channel and gets one ack name; either way nothing is refused"
+      }
+    },
+    {
+      "id": "event_before_ack_is_delivered",
+      "send": [
+        "ticker:BTC/USDT"
+      ],
+      "server": [
+        {
+          "type": "ticker.update",
+          "channel": "ticker:BTC/USDT",
+          "timestamp": "2026-10-02T09:15:01Z",
+          "data": {
+            "symbol": "BTC/USDT",
+            "last": "61000"
+          }
+        },
+        {
+          "type": "subscribed",
+          "channels": [
+            "ticker:BTC/USDT"
+          ]
+        }
+      ],
+      "expect": {
+        "added": [
+          "ticker:BTC/USDT"
+        ],
+        "refused": {},
+        "fails": false,
+        "events_delivered": [
+          "ticker.update"
+        ]
+      }
+    },
+    {
+      "id": "idless_error_not_attributed",
+      "send": [
+        "ticker:BTC/USDT"
+      ],
+      "server": [
+        {
+          "type": "error",
+          "code": "CONCURRENT_MODIFICATION",
+          "message": "(any text)",
+          "id": null
+        },
+        {
+          "type": "subscribed",
+          "channels": [
+            "ticker:BTC/USDT"
+          ]
+        }
+      ],
+      "expect": {
+        "added": [
+          "ticker:BTC/USDT"
+        ],
+        "refused": {},
+        "fails": false,
+        "request_has_id": true
+      }
+    }
+  ]
+}

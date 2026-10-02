@@ -33,6 +33,7 @@ SUBS = [
     (r"\basync with\b", "with"),
     (r"\bawait ", ""),
     (r"for item in page\.items:\n(\s+)yield item", r"yield from page.items"),
+    (r"for (\w+) in ([^\n]+):\n\s+yield \1\n", r"yield from \2\n"),
     (r"\bAsyncIterator\b", "Iterator"),
     (r"\bhttpx\.AsyncClient\b", "httpx.Client"),
     (r"\bAsyncClient\b", "Client"),

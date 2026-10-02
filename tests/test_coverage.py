@@ -1,4 +1,4 @@
-"""The facade exposes exactly the 42 allowlisted operations in spec/openapi.sdk.json."""
+"""The facade exposes exactly the 51 allowlisted operations in spec/openapi.sdk.json."""
 
 from __future__ import annotations
 
@@ -35,8 +35,8 @@ def facade_methods(client: Any) -> Dict[str, Any]:
     return found
 
 
-def test_spec_has_42_operations() -> None:
-    assert len(SPEC_OPS) == 42
+def test_spec_has_51_operations() -> None:
+    assert len(SPEC_OPS) == 51
 
 
 @pytest.mark.parametrize("cls", [cexy.Client, cexy.AsyncClient])
@@ -62,8 +62,12 @@ def test_every_schema_is_generated() -> None:
     # Scalar aliases are inlined by the generator rather than emitted as classes: Amount (a
     # decimal string, which becomes decimal.Decimal) and DetailValue (string | integer | boolean).
     inlined = {"Amount", "DetailValue"}
-    missing = [n for n in SPEC["components"]["schemas"] if n not in inlined and not hasattr(models, n)]
+    # Futures schemas renamed like in the other SDKs (scripts/generate.py SCHEMA_RENAMES).
+    renamed = {"Candle": "FuturesCandle", "Fill": "FuturesFill", "PublicTrade": "FuturesPublicTrade"}
+    names = [renamed.get(n, n) for n in SPEC["components"]["schemas"] if n not in inlined]
+    missing = [n for n in names if not hasattr(models, n)]
     assert missing == []
+    assert not any(hasattr(models, old) for old in renamed)
 
 
 # Dummy values for required arguments, by parameter name.
@@ -82,6 +86,7 @@ ARGS: Dict[str, Any] = {
     "order_id": "o1",
     "client_order_id": "c1",
     "id": "sub_1",
+    "coin": "BTC",
 }
 
 
