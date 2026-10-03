@@ -1,7 +1,8 @@
 """CEXY.io WebSocket client (asyncio).
 
 One multiplexed connection to ``wss://api.cexy.io/api/v1/ws`` carries every
-subscription. This client implements the rules in ``asyncapi.yaml``:
+subscription. This client implements the contract in ``asyncapi.yaml`` and the client rules in
+cexy-api-spec's ``ws-client-rules.md``:
 
 - sends ``{"op":"ping"}`` every 30 s (required: only client frames keep the connection
   alive; the server closes an idle connection after 90-120 s);
