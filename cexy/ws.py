@@ -1124,7 +1124,7 @@ class WebSocketClient:
                 fut.set_result(frame)
             return
         if ftype == "signed_out":
-            # signed_out (a planned server frame): the server signed this connection out (token
+            # signed_out: the server signed this connection out (token
             # expired, session revoked, or a future reason). Private subscriptions are gone; a fresh
             # auth on this socket restores them.
             raw_reason = frame.get("reason")
