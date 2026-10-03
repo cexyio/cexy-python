@@ -1130,6 +1130,12 @@ class WebSocketClient:
             raw_reason = frame.get("reason")
             reason = raw_reason if isinstance(raw_reason, str) and raw_reason else "unknown"
             self._token = None
+            if reason in ("key_revoked", "key_expired"):
+                self._key_auth = False
+            if not self.authenticated:
+                # Already signed out: session.revoked {current: true} precedes signed_out
+                # {reason: revoked}, and the pair is one sign-out.
+                return
             if reason == "revoked":
                 self._signed_out("session_revoked")
                 lost = {"session_id": None, "reason": "signed_out", "current": True}
@@ -1137,7 +1143,6 @@ class WebSocketClient:
             elif reason == "expired":
                 self._signed_out("token_expired")
             elif reason in ("key_revoked", "key_expired"):
-                self._key_auth = False
                 self._signed_out(reason)
             else:
                 self._signed_out("signed_out", reason)
