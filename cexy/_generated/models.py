@@ -465,14 +465,7 @@ class LedgerEntryKind(OpenEnum):
     FUTURES_TRANSFER_RELEASE = "futures_transfer_release"
     FUTURES_COLLATERAL_SENT = "futures_collateral_sent"
     FUTURES_COLLATERAL_RETURNED = "futures_collateral_returned"
-    TRADE_FEE_REVENUE = "trade_fee_revenue"
-    WITHDRAWAL_FEE_REVENUE = "withdrawal_fee_revenue"
     WITHDRAWAL_REFUND = "withdrawal_refund"
-    WITHDRAWAL_FEE_REVENUE_REVERSAL = "withdrawal_fee_revenue_reversal"
-    FUTURES_TRANSFER_FEE_REVENUE = "futures_transfer_fee_revenue"
-    FUTURES_HYPERLIQUID_COST = "futures_hyperliquid_cost"
-    FUTURES_TRANSFER_DISCREPANCY = "futures_transfer_discrepancy"
-    EXCHANGE_CAPITAL = "exchange_capital"
 
 
 class LedgerEntryResponse(BaseModel):

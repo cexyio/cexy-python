@@ -4908,14 +4908,7 @@
           "futures_transfer_release",
           "futures_collateral_sent",
           "futures_collateral_returned",
-          "trade_fee_revenue",
-          "withdrawal_fee_revenue",
-          "withdrawal_refund",
-          "withdrawal_fee_revenue_reversal",
-          "futures_transfer_fee_revenue",
-          "futures_hyperliquid_cost",
-          "futures_transfer_discrepancy",
-          "exchange_capital"
+          "withdrawal_refund"
         ]
       },
       "LedgerEntryResponse": {
