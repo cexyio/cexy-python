@@ -1,7 +1,8 @@
 """CEXY.io WebSocket client (asyncio).
 
 One multiplexed connection to ``wss://api.cexy.io/api/v1/ws`` carries every
-subscription. This client implements the rules in ``asyncapi.yaml``:
+subscription. This client implements the contract in ``asyncapi.yaml`` and the client rules in
+cexy-api-spec's ``ws-client-rules.md``:
 
 - sends ``{"op":"ping"}`` every 30 s (required: only client frames keep the connection
   alive; the server closes an idle connection after 90-120 s);
@@ -1123,12 +1124,18 @@ class WebSocketClient:
                 fut.set_result(frame)
             return
         if ftype == "signed_out":
-            # signed_out (a planned server frame): the server signed this connection out (token
+            # signed_out: the server signed this connection out (token
             # expired, session revoked, or a future reason). Private subscriptions are gone; a fresh
             # auth on this socket restores them.
             raw_reason = frame.get("reason")
             reason = raw_reason if isinstance(raw_reason, str) and raw_reason else "unknown"
             self._token = None
+            if reason in ("key_revoked", "key_expired"):
+                self._key_auth = False
+            if not self.authenticated:
+                # Already signed out: session.revoked {current: true} precedes signed_out
+                # {reason: revoked}, and the pair is one sign-out.
+                return
             if reason == "revoked":
                 self._signed_out("session_revoked")
                 lost = {"session_id": None, "reason": "signed_out", "current": True}
@@ -1136,7 +1143,6 @@ class WebSocketClient:
             elif reason == "expired":
                 self._signed_out("token_expired")
             elif reason in ("key_revoked", "key_expired"):
-                self._key_auth = False
                 self._signed_out(reason)
             else:
                 self._signed_out("signed_out", reason)

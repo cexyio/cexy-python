@@ -1,5 +1,5 @@
 {
-  "description": "Server-initiated sign-out and list resyncs (planned server frames; clients should already handle them). Same step kinds and tracked events as private_signout.json. {\"type\":\"signed_out\",\"reason\":R} (no id, channel or sequence) means the server signed this connection out: private subscriptions are gone, public ones and the socket stay, and a fresh auth on the same socket is accepted. The client drops its held private channels into pending, forgets the token, and emits auth_changed with reason token_expired (R = expired), session_revoked (R = revoked, which ALSO emits auth_lost: once the server sends this frame, a revocation seen by another server instance arrives only this way) or signed_out with code R for any other value (the set may grow). Pending private channels are re-subscribed after the next successful auth, followed by resync {reason: reauth}. deposits.resync and withdrawals.resync (data {}, no sequence) emit resync with reason deposits_resync or withdrawals_resync: refetch that list.",
+  "description": "Server-initiated sign-out and list resyncs. Same step kinds and tracked events as private_signout.json. {\"type\":\"signed_out\",\"reason\":R} (no id, channel or sequence) means the server signed this connection out: private subscriptions are gone, public ones and the socket stay, and a fresh auth on the same socket is accepted. The client drops its held private channels into pending, forgets the token, and emits auth_changed with reason token_expired (R = expired), session_revoked (R = revoked, which ALSO emits auth_lost: once the server sends this frame, a revocation seen by another server instance arrives only this way) or signed_out with code R for any other value (the set may grow). Pending private channels are re-subscribed after the next successful auth, followed by resync {reason: reauth}. deposits.resync and withdrawals.resync (data {}, no sequence) emit resync with reason deposits_resync or withdrawals_resync: refetch that list. When the connection's own session is revoked, session.revoked {current: true} arrives first and signed_out {reason: revoked} follows: that pair is one sign-out (one auth_changed, one auth_lost, nothing dropped twice), so a signed_out that arrives while the client is already signed out emits nothing.",
   "cases": [
     {
       "id": "signed_out_expired",
@@ -429,6 +429,156 @@
         },
         {
           "expect_token": true
+        }
+      ]
+    },
+    {
+      "id": "session_revoked_then_signed_out_once",
+      "steps": [
+        {
+          "client": "auth",
+          "token": "tok_a"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "client": "subscribe",
+          "channels": [
+            "account",
+            "balances",
+            "ticker:BTC/USDT"
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "account",
+              "balances",
+              "ticker:BTC/USDT"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "account",
+                "balances",
+                "ticker:BTC/USDT"
+              ]
+            }
+          ]
+        },
+        {
+          "server": {
+            "type": "session.revoked",
+            "channel": "account",
+            "data": {
+              "session_id": "sess_a",
+              "reason": "logout",
+              "current": true
+            }
+          }
+        },
+        {
+          "expect_events": [
+            {
+              "type": "auth_changed",
+              "reason": "session_revoked",
+              "previous_user_id": "aaaa0001",
+              "user_id": null,
+              "dropped": [
+                "account",
+                "balances"
+              ]
+            },
+            {
+              "type": "auth_lost"
+            }
+          ]
+        },
+        {
+          "server": {
+            "type": "signed_out",
+            "reason": "revoked"
+          }
+        },
+        {
+          "expect_sent": []
+        },
+        {
+          "expect_events": []
+        },
+        {
+          "expect_held": [
+            "ticker:BTC/USDT"
+          ]
+        },
+        {
+          "expect_token": false
+        },
+        {
+          "client": "auth",
+          "token": "tok_a_new"
+        },
+        {
+          "server": {
+            "type": "authenticated",
+            "user_id": "aaaa0001"
+          },
+          "reply_to": "auth"
+        },
+        {
+          "expect_sent": [
+            {
+              "op": "auth",
+              "token": "tok_a_new"
+            },
+            {
+              "op": "subscribe",
+              "channels": [
+                "account",
+                "balances"
+              ]
+            }
+          ]
+        },
+        {
+          "server": {
+            "type": "subscribed",
+            "channels": [
+              "account",
+              "balances"
+            ]
+          },
+          "reply_to": "subscribe"
+        },
+        {
+          "expect_events": [
+            {
+              "type": "resync",
+              "reason": "reauth"
+            }
+          ]
+        },
+        {
+          "expect_held": [
+            "account",
+            "balances",
+            "ticker:BTC/USDT"
+          ]
         }
       ]
     }
