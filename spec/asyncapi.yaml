@@ -1146,7 +1146,8 @@ components:
       name: order.updated
       title: '`order.updated`'
       summary: An order changed without executing.
-      description: 'An order changed without executing. Carries the order.
+      description: 'An order changed without executing. Carries the order. Also sent when the exchange
+        closes an order on its own; `status_reason` says why.
 
 
         Sequenced: `sequence` rises by one per frame on the channel. A gap means a frame was missed: refetch
@@ -1227,7 +1228,8 @@ components:
       name: order.cancelled
       title: '`order.cancelled`'
       summary: An order was cancelled or expired.
-      description: 'An order was cancelled or expired. Carries the order.
+      description: 'An order was cancelled or expired. Carries the order. Also sent when the exchange
+        closes an order on its own; `status_reason` says why.
 
 
         Sequenced: `sequence` rises by one per frame on the channel. A gap means a frame was missed: refetch

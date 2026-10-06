@@ -5405,6 +5405,7 @@
           "withdrawal_completed",
           "withdrawal_failed",
           "order_filled",
+          "order_closed",
           "security",
           "listing_decision",
           "announcement"

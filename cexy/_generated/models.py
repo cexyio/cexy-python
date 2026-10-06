@@ -637,6 +637,7 @@ class NotificationKind(OpenEnum):
     WITHDRAWAL_COMPLETED = "withdrawal_completed"
     WITHDRAWAL_FAILED = "withdrawal_failed"
     ORDER_FILLED = "order_filled"
+    ORDER_CLOSED = "order_closed"
     SECURITY = "security"
     LISTING_DECISION = "listing_decision"
     ANNOUNCEMENT = "announcement"
