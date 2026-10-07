@@ -3,6 +3,25 @@
 All notable changes to this project are documented here. The SDK stays at 0.x until API
 request signing (HMAC) ships; see "Versioning" in README.md.
 
+## 0.1.0.dev13 (2026-10-07)
+
+### Added
+- `NotificationKind.ORDER_CLOSED` (`"order_closed"`) (cexy-api-spec `b12b03d`, order-close sync).
+
+### Changed
+- `LedgerEntryKind` drops 7 members that ledger entries never carry: `trade_fee_revenue`,
+  `withdrawal_fee_revenue`, `withdrawal_fee_revenue_reversal`, `futures_transfer_fee_revenue`,
+  `futures_hyperliquid_cost`, `futures_transfer_discrepancy`, `exchange_capital`. An unknown value still
+  decodes as `LedgerEntryKind.UNKNOWN`.
+
+### Fixed
+- WebSocket: when the connection's own session is revoked, the server sends `session.revoked {current: true}`
+  and then `signed_out {reason: revoked}`. The client treated both as sign-outs and emitted `auth_changed`
+  and `auth_lost` twice. `signed_out` now changes nothing when the connection is already signed out, apart
+  from forgetting the token. Shared conformance case: `session_revoked_then_signed_out_once`.
+- `spec/asyncapi.yaml` is now generated from the server's AsyncAPI document; the client rules live in
+  cexy-api-spec's `ws-client-rules.md`.
+
 ## 0.1.0.dev12 (2026-10-02)
 
 ### Added
