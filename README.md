@@ -237,7 +237,7 @@ except UnprocessableError as err:
     `INVALID_STATE` (an earlier attempt already cancelled the order, or it filled
     meanwhile), the SDK fetches and returns the order's current state, so check `status`.
   - **`cancel_all`** is retried: repeating it only cancels whatever is still open.
-  - **`cancel_all_after`** is retried: a repeated arm or disarm leaves the same state.
+  - **`cancel_all_after`** is retried: a repeated arm leaves a deadline no earlier, and a repeated disarm leaves it disarmed.
 - **Pool join/exit** carry an automatically generated `Idempotency-Key` header, reused on
   every retry of the same call. A `409 CONCURRENT_MODIFICATION` (the same key still in
   flight) is retried with the same key. Pass `idempotency_key=` to use your own.

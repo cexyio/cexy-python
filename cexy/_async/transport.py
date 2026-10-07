@@ -41,8 +41,8 @@ _NOT_SENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
 _AMBIGUOUS_STATUS = frozenset({500, 502, 504})
 #: Mutations that are safe to repeat without an Idempotency-Key: place_order (its
 #: client_order_id makes the server refuse a repeat; see ``recover``), cancel_order and
-#: cancel_all (cancelling twice changes nothing more) and cancel_all_after (a repeated arm or
-#: disarm leaves the same state).
+#: cancel_all (cancelling twice changes nothing more) and cancel_all_after (a repeated arm leaves a
+#: deadline no earlier, a repeated disarm leaves it disarmed).
 REPEAT_SAFE_MUTATIONS = frozenset({"place_order", "cancel_order", "cancel_all", "cancel_all_after"})
 
 
