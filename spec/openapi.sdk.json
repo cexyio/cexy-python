@@ -2467,7 +2467,7 @@
             }
           },
           "409": {
-            "description": "That client order id is already in use (ALREADY_EXISTS). Answered before any market, body or funds check; details carry client_order_id and the existing order's order_id and status",
+            "description": "That client order id is already in use (ALREADY_EXISTS). Answered before any market, body or funds check, and before the dead-man check; details carry client_order_id and the existing order's order_id and status. Or (`DEAD_MAN_NOT_ARMED`, details.market) a house account has no live cancel-all-after deadline for this market",
             "content": {
               "application/json": {
                 "schema": {
@@ -2616,6 +2616,75 @@
           },
           "429": {
             "description": "Over 30 calls a minute for this account; `details.retry_after_seconds` says when to retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
+          }
+        ],
+        "x-required-scope": "trade"
+      }
+    },
+    "/api/v1/trading/orders/cancel-all-after": {
+      "post": {
+        "tags": [
+          "trading"
+        ],
+        "summary": "Arms the dead-man switch: unless armed again within `timeout_ms`, every open order (and",
+        "description": "untriggered stop) in scope is cancelled, as by `POST /trading/orders/cancel-all`.\n\nArm it again before it runs out to keep quoting \u2014 for example every 2 seconds with a 10-second timeout \u2014 and if the program quoting stops, its orders are cancelled about a second after the deadline. Once fired, the switch is cleared: quoting again needs a new arm. `timeout_ms` of `0` disarms it. A per-market switch and the all-markets switch are separate, and each fires on its own.\n\nA halt does not stop it: cancelling is always allowed. Accounts the exchange quotes from must keep one armed for each market they place orders in, and are refused with `DEAD_MAN_NOT_ARMED` (409, `details.market`) otherwise; such a refusal means \"stop quoting\", not \"retry\".",
+        "operationId": "cancel_all_after",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelAllAfterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The switch as set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/CancelAllAfterResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`timeout_ms` is neither 0 nor between 5000 and 600000",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such market",
             "content": {
               "application/json": {
                 "schema": {
@@ -3750,6 +3819,66 @@
           }
         }
       },
+      "CancelAllAfterRequest": {
+        "type": "object",
+        "description": "Arms, re-arms or disarms the dead-man switch.",
+        "required": [
+          "timeout_ms"
+        ],
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "description": "One market's orders only. Omitted or `null`, the switch covers every market. A per-market switch and the all-markets switch are separate: each fires on its own.",
+            "example": "BTC/USDT",
+            "nullable": true
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Milliseconds from now after which the open orders in scope are cancelled, unless the switch is armed again first: from 5000 to 600000. `0` disarms.",
+            "example": 10000,
+            "maximum": 600000,
+            "minimum": 0
+          }
+        }
+      },
+      "CancelAllAfterResponse": {
+        "type": "object",
+        "description": "The dead-man switch, as just set.",
+        "required": [
+          "armed",
+          "timeout_ms",
+          "server_time"
+        ],
+        "properties": {
+          "armed": {
+            "type": "boolean",
+            "description": "Whether a deadline is now armed for this scope. `false` after a disarm."
+          },
+          "deadline": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the orders are cancelled unless armed again. `null` when disarmed.",
+            "nullable": true
+          },
+          "server_time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The server's clock when the switch was set, to measure the deadline against."
+          },
+          "symbol": {
+            "type": "string",
+            "description": "The market it covers, or `null` for every market.",
+            "nullable": true
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The timeout asked for, in milliseconds.",
+            "minimum": 0
+          }
+        }
+      },
       "CancelAllRequest": {
         "type": "object",
         "description": "Cancels every open order, optionally within one market.",
@@ -4194,6 +4323,7 @@
           "EVIDENCE_CONTRADICTS",
           "AMOUNT_MISMATCH",
           "CONCURRENT_MODIFICATION",
+          "DEAD_MAN_NOT_ARMED",
           "INSUFFICIENT_FUNDS",
           "INSUFFICIENT_FEE_FUNDS",
           "MARKET_UNAVAILABLE",

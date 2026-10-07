@@ -595,6 +595,41 @@ class Trading(_Resource):
         payload = self._t.request("cancel_all", body={"symbol": symbol}, max_retries=max_retries)
         return m.CancelAllResponse.model_validate(_data(payload))
 
+    @operation("cancel_all_after")
+    def cancel_all_after(self, *, symbol: Optional[str], timeout_ms: int) -> m.CancelAllAfterResponse:
+        """Arm, re-arm or disarm the dead-man switch: if it is not renewed within ``timeout_ms``
+        the exchange cancels your open orders in ``symbol``.
+
+        ``symbol`` is a required keyword: a market such as ``"BTC/USDT"``, or ``None`` for the
+        switch that covers every market (sent as an explicit JSON null). An empty or
+        whitespace-only string raises ``ValueError`` (the server would read it as every market).
+        ``timeout_ms`` must be an int >= 0 (not a bool or float); ``0`` disarms, any other value
+        must be 5000..600000, which only the server checks (it answers 400 otherwise).
+
+        Use: arm about every 2 s with a 10 s timeout (``timeout_ms=10_000``). Take your local
+        deadline from when the call started, not when it returned, and never compare the local
+        clock with the response's ``deadline``. A switch that has fired is cleared: quoting
+        again needs a new arm. The per-market and the all-markets switches are separate, and
+        ``timeout_ms=0`` disarms only the scope given. Repeating a call is harmless, so it is
+        retried like ``cancel_all`` and no Idempotency-Key is sent; but an arm still in flight
+        can land after a later disarm and re-arm it, so after a retried arm, disarm once more
+        if the switch must be off. No endpoint reads the switch; the response is the only
+        evidence (``armed``, ``deadline``, ``server_time``, ``symbol``, ``timeout_ms``).
+
+        When the switch is required, ``place_order`` can fail with ``DEAD_MAN_NOT_ARMED``
+        (``ConflictError``, 409, ``details["market"]``): stop quoting and arm again; the order is
+        never retried by the SDK, and neither should you retry it unarmed.
+        """
+        if symbol is not None:
+            if not isinstance(symbol, str):
+                raise TypeError("symbol must be a market string or None")
+            if not symbol.strip():
+                raise ValueError("symbol must not be empty: pass None to cover every market")
+        if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or timeout_ms < 0:
+            raise ValueError("timeout_ms must be an int >= 0 (0 disarms)")
+        payload = self._t.request("cancel_all_after", body={"symbol": symbol, "timeout_ms": timeout_ms}, keep_null=True)
+        return m.CancelAllAfterResponse.model_validate(_data(payload))
+
 
 class Futures(_Resource):
     """Futures data, read only. Market data is public; the account's own positions, orders,

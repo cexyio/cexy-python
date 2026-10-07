@@ -43,8 +43,9 @@ _NOT_SENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
 _AMBIGUOUS_STATUS = frozenset({500, 502, 504})
 #: Mutations that are safe to repeat without an Idempotency-Key: place_order (its
 #: client_order_id makes the server refuse a repeat; see ``recover``), cancel_order and
-#: cancel_all (cancelling twice changes nothing more).
-REPEAT_SAFE_MUTATIONS = frozenset({"place_order", "cancel_order", "cancel_all"})
+#: cancel_all (cancelling twice changes nothing more) and cancel_all_after (a repeated arm leaves a
+#: deadline no earlier, a repeated disarm leaves it disarmed).
+REPEAT_SAFE_MUTATIONS = frozenset({"place_order", "cancel_order", "cancel_all", "cancel_all_after"})
 
 
 class SyncTransport:
@@ -88,6 +89,7 @@ class SyncTransport:
         recover: Optional[Callable[[], Any]] = None,
         on_retry_error: Optional[Callable[[CexyApiError], Any]] = None,
         max_retries: Optional[int] = None,
+        keep_null: bool = False,
     ) -> Any:
         """Send one logical request, retrying where that is safe.
 
@@ -102,6 +104,8 @@ class SyncTransport:
         ``max_retries``: overrides the client's retry count for this call; ``cancel_all``'s
         until_done loop passes 0 and does its own retrying, so every HTTP request is one round.
 
+        ``keep_null``: send ``None`` values in ``body`` as JSON null instead of dropping them.
+
         A mutation is retried only when it is repeat-safe: it carries an ``Idempotency-Key``
         (pool join/exit), or it is one of ``REPEAT_SAFE_MUTATIONS`` (place_order through its
         ``client_order_id``, cancel_order and cancel_all). Any other mutation is sent once.
@@ -115,7 +119,7 @@ class SyncTransport:
             retries = 0
         qs = build_query_string(op, query)
         url = self.base_url + build_path(op, path) + (f"?{qs}" if qs else "")
-        content = encode_body(body)
+        content = encode_body(body, keep_null=keep_null)
         headers: Dict[str, str] = {"User-Agent": self.user_agent, "Accept": "application/json"}
         if content is not None:
             headers["Content-Type"] = "application/json"

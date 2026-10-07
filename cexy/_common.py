@@ -111,10 +111,11 @@ def build_query(op: Operation, query: Optional[Mapping[str, Any]]) -> Dict[str, 
     return out
 
 
-def encode_body(body: Optional[Mapping[str, Any]]) -> Optional[bytes]:
+def encode_body(body: Optional[Mapping[str, Any]], *, keep_null: bool = False) -> Optional[bytes]:
+    """JSON body bytes. ``None`` values are dropped unless ``keep_null`` (an explicit JSON null)."""
     if body is None:
         return None
-    return json.dumps({k: v for k, v in body.items() if v is not None}, separators=(",", ":")).encode()
+    return json.dumps({k: v for k, v in body.items() if keep_null or v is not None}, separators=(",", ":")).encode()
 
 
 def lower_headers(headers: Mapping[str, str]) -> Dict[str, str]:

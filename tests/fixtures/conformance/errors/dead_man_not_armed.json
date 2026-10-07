@@ -1,0 +1,21 @@
+{
+  "status": 409,
+  "body": {
+    "error": {
+      "code": "DEAD_MAN_NOT_ARMED",
+      "message": "A house account must arm cancel-all-after for this market before quoting",
+      "details": {
+        "market": "BTC/USDT"
+      },
+      "request_id": "req_test_dm",
+      "retryable": false
+    }
+  },
+  "expect": {
+    "retry": false,
+    "error_code": "DEAD_MAN_NOT_ARMED",
+    "details": {
+      "market": "BTC/USDT"
+    }
+  }
+}

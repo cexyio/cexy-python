@@ -1,4 +1,4 @@
-"""The facade exposes exactly the 51 allowlisted operations in spec/openapi.sdk.json."""
+"""The facade exposes exactly the 52 allowlisted operations in spec/openapi.sdk.json."""
 
 from __future__ import annotations
 
@@ -35,8 +35,8 @@ def facade_methods(client: Any) -> Dict[str, Any]:
     return found
 
 
-def test_spec_has_51_operations() -> None:
-    assert len(SPEC_OPS) == 51
+def test_spec_has_52_operations() -> None:
+    assert len(SPEC_OPS) == 52
 
 
 @pytest.mark.parametrize("cls", [cexy.Client, cexy.AsyncClient])
@@ -73,6 +73,7 @@ def test_every_schema_is_generated() -> None:
 # Dummy values for required arguments, by parameter name.
 ARGS: Dict[str, Any] = {
     "symbol": "BTC/USDT",
+    "timeout_ms": 10000,
     "asset": "BTC",
     "network": "bitcoin-mainnet",
     "interval": "1h",

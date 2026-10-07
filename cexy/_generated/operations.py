@@ -148,6 +148,9 @@ OPERATIONS = {
     "cancel_all": Operation(
         "cancel_all", "POST", "/api/v1/trading/orders/cancel-all", "api_key", "trade", (), (), False
     ),
+    "cancel_all_after": Operation(
+        "cancel_all_after", "POST", "/api/v1/trading/orders/cancel-all-after", "api_key", "trade", (), (), False
+    ),
     "order_history": Operation(
         "order_history",
         "GET",

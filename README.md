@@ -75,7 +75,7 @@ Both `api_key` and `api_secret` are required together; passing only one raises
 |---|---|
 | `client.account` | `balances()`, `balance(asset)`, `ledger()`, `notifications()`, `sub_accounts()`, `sub_account_balances(id)`, `api_keys()` |
 | `client.wallet` | `deposits()`, `deposit(id)`, `withdrawals()`, `withdrawal(id)`, `withdrawal_addresses()`, `deposit_address(asset, network)` |
-| `client.trading` | `open_orders()`, `order(id)`, `order_by_client_id(id)`, `order_history()`, `trades()`, `place_order(...)`, `cancel_order(id)`, `cancel_all(symbol=...)` |
+| `client.trading` | `open_orders()`, `order(id)`, `order_by_client_id(id)`, `order_history()`, `trades()`, `place_order(...)`, `cancel_order(id)`, `cancel_all(symbol=...)`, `cancel_all_after(symbol=..., timeout_ms=...)` |
 | `client.exports` | `deposits()`, `ledger()`, `orders()`, `trades()`, `withdrawals()` (CSV bytes) |
 | `client.pools` | `join(symbol, base_amount=, quote_amount=)`, `exit(symbol, shares=)` |
 
@@ -106,6 +106,27 @@ without progress; after a 429 it waits the server's `Retry-After` exactly. A wai
 `time_budget` is not taken: the loop stops with `stopped == "time_budget"`. A non-retryable error is
 raised with the merged result so far in `err.partial`.
 
+### Dead-man switch
+
+`cancel_all_after(symbol=..., timeout_ms=...)` arms a switch that cancels your open orders if
+you do not renew it in time. `symbol` is required: a market, or `None` for the all-markets
+switch (an empty or blank string raises `ValueError`). `timeout_ms=0` disarms; other values must
+be 5000..600000 (the server checks that). Arm about every 2 s with a 10 s timeout:
+
+```python
+res = client.trading.cancel_all_after(symbol=None, timeout_ms=10_000)
+res.armed, res.deadline, res.server_time, res.timeout_ms
+```
+
+- Take your local deadline from when the call started; never compare your clock with `deadline`.
+- A switch that fired is cleared: quoting again needs a new arm.
+- Per-market and all-markets switches are separate; `0` disarms only the scope you pass.
+- The call is repeat-safe and is retried. An arm still in flight can land after a later disarm,
+  so after a retried arm, disarm once more if the switch must be off.
+- No endpoint reads the switch.
+- `place_order` can fail with `DEAD_MAN_NOT_ARMED` (`ConflictError`, 409, `details["market"]`):
+  stop quoting and arm again. It is never retried, and the SDK does not look the order up.
+
 The async client has the same methods:
 
 ```python
@@ -118,6 +139,7 @@ async def main() -> None:
 
 asyncio.run(main())
 ```
+
 
 ## Amounts
 
@@ -215,6 +237,7 @@ except UnprocessableError as err:
     `INVALID_STATE` (an earlier attempt already cancelled the order, or it filled
     meanwhile), the SDK fetches and returns the order's current state, so check `status`.
   - **`cancel_all`** is retried: repeating it only cancels whatever is still open.
+  - **`cancel_all_after`** is retried: a repeated arm leaves a deadline no earlier, and a repeated disarm leaves it disarmed.
 - **Pool join/exit** carry an automatically generated `Idempotency-Key` header, reused on
   every retry of the same call. A `409 CONCURRENT_MODIFICATION` (the same key still in
   flight) is retried with the same key. Pass `idempotency_key=` to use your own.

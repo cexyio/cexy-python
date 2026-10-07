@@ -35,6 +35,59 @@ class ApiScope(OpenEnum):
     TRADE = "trade"
 
 
+class CancelAllAfterRequest(BaseModel):
+    """
+    Arms, re-arms or disarms the dead-man switch.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    symbol: Annotated[
+        Optional[str],
+        Field(
+            description="One market's orders only. Omitted or `null`, the switch covers every market. A per-market switch and the all-markets switch are separate: each fires on its own.",
+            examples=["BTC/USDT"],
+        ),
+    ] = None
+    timeout_ms: Annotated[
+        int,
+        Field(
+            description="Milliseconds from now after which the open orders in scope are cancelled, unless the switch is armed again first: from 5000 to 600000. `0` disarms.",
+            examples=[10000],
+            ge=0,
+            le=600000,
+        ),
+    ]
+
+
+class CancelAllAfterResponse(BaseModel):
+    """
+    The dead-man switch, as just set.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    armed: Annotated[
+        bool,
+        Field(description="Whether a deadline is now armed for this scope. `false` after a disarm."),
+    ]
+    deadline: Annotated[
+        Optional[AwareDatetime],
+        Field(description="When the orders are cancelled unless armed again. `null` when disarmed."),
+    ] = None
+    server_time: Annotated[
+        AwareDatetime,
+        Field(description="The server's clock when the switch was set, to measure the deadline against."),
+    ]
+    symbol: Annotated[
+        Optional[str],
+        Field(description="The market it covers, or `null` for every market."),
+    ] = None
+    timeout_ms: Annotated[int, Field(description="The timeout asked for, in milliseconds.", ge=0)]
+
+
 class CancelAllRequest(BaseModel):
     """
     Cancels every open order, optionally within one market.
@@ -217,6 +270,7 @@ class ErrorCode(OpenEnum):
     EVIDENCE_CONTRADICTS = "EVIDENCE_CONTRADICTS"
     AMOUNT_MISMATCH = "AMOUNT_MISMATCH"
     CONCURRENT_MODIFICATION = "CONCURRENT_MODIFICATION"
+    DEAD_MAN_NOT_ARMED = "DEAD_MAN_NOT_ARMED"
     INSUFFICIENT_FUNDS = "INSUFFICIENT_FUNDS"
     INSUFFICIENT_FEE_FUNDS = "INSUFFICIENT_FEE_FUNDS"
     MARKET_UNAVAILABLE = "MARKET_UNAVAILABLE"

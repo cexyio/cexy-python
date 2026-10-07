@@ -3,6 +3,15 @@
 All notable changes to this project are documented here. The SDK stays at 0.x until API
 request signing (HMAC) ships; see "Versioning" in README.md.
 
+## Unreleased
+
+### Added
+- `trading.cancel_all_after(symbol=, timeout_ms=)` (sync and async): the dead-man switch,
+  `POST /trading/orders/cancel-all-after`. `symbol` is required (`None` = every market, sent as
+  JSON null; a blank string raises `ValueError`); `timeout_ms` must be an int >= 0 (0 disarms; the
+  server checks the 5000..600000 range). Retried like `cancel_all`.
+- Error code `DEAD_MAN_NOT_ARMED` (409 `ConflictError`, not retryable, `details["market"]`).
+
 ## 0.1.0.dev13 (2026-10-07)
 
 ### Added
