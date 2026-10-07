@@ -2450,6 +2450,7 @@ components:
         the caller took in a trade, so a self-trade sends two.'
       required:
       - fee
+      - fee_asset
       - order_id
       - price
       - quantity
@@ -2462,6 +2463,10 @@ components:
       properties:
         fee:
           $ref: '#/components/schemas/Amount'
+        fee_asset:
+          type: string
+          description: 'The asset `fee` is in: always the market''s quote asset, for maker and taker,
+            buyer and seller alike.'
         order_id:
           type: string
           description: The caller's order that filled.
