@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. The SDK stays at 0.x until API
 request signing (HMAC) ships; see "Versioning" in README.md.
 
-## Unreleased
+## 0.1.0.dev14 (2026-10-07)
 
 ### Added
 - `trading.cancel_all_after(symbol=, timeout_ms=)` (sync and async): the dead-man switch,
