@@ -101,7 +101,7 @@ class NotFoundError(CexyApiError):
 
 class ConflictError(CexyApiError):
     """409: conflicts such as ``ALREADY_EXISTS``, ``INVALID_STATE``,
-    ``IDEMPOTENCY_KEY_CONFLICT`` or ``CONCURRENT_MODIFICATION``."""
+    ``IDEMPOTENCY_KEY_CONFLICT``, ``CONCURRENT_MODIFICATION`` or ``DEAD_MAN_NOT_ARMED``."""
 
 
 class UnprocessableError(CexyApiError):
@@ -186,6 +186,7 @@ for _cls, _codes in {
         "WINDOW_OPEN",
         "EVIDENCE_CONTRADICTS",
         "AMOUNT_MISMATCH",
+        "DEAD_MAN_NOT_ARMED",
     ),
     UnprocessableError: (
         "INSUFFICIENT_FUNDS",
