@@ -259,6 +259,11 @@ def retry_after_seconds(headers: Mapping[str, str], details: Mapping[str, Any]) 
             if x is not None:
                 values.append(x)
     d = details.get("retry_after_seconds") if isinstance(details, Mapping) else None
+    if isinstance(d, str):  # a numeric string, same rules as a number
+        try:
+            d = float(d.strip())
+        except ValueError:
+            d = None
     if isinstance(d, (int, float)) and not isinstance(d, bool):
         try:
             f = float(d)

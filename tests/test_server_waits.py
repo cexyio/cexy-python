@@ -113,3 +113,106 @@ def test_limiter_ignores_unusable_headers_and_caps_waits() -> None:
     ):
         bucket.update_from_headers(headers)
         assert 0 <= bucket.acquire() <= MAX_WAIT_S
+
+
+# --- shared hold: a 429 with a hint blocks the whole client's limiter ---------------------------
+
+
+def _hold_client(fc: FakeClock) -> cexy.Client:
+    c = cexy.Client(max_retries=0)
+    c._transport._sleep = fc.sleep
+    c._transport._clock = fc.clock
+    return c
+
+
+@respx.mock
+def test_429_hint_holds_the_next_call_sync() -> None:
+    respx.get(URL).mock(
+        side_effect=[
+            httpx.Response(429, json={"error": {"code": "RATE_LIMITED", "message": "x"}}, headers={"Retry-After": "3"}),
+            httpx.Response(200, json={"data": {"epoch_ms": 1, "iso": "2026-01-01T00:00:00Z"}}),
+        ]
+    )
+    fc = FakeClock()
+    client = _hold_client(fc)
+    with pytest.raises(cexy.RateLimitError):
+        client.time()
+    assert fc.sleeps == []  # max_retries=0: the failing call itself does not wait
+    client.time()
+    assert len(fc.sleeps) == 1 and 3 <= fc.sleeps[0] <= 3.25
+
+
+def test_429_hint_holds_the_next_call_async() -> None:
+    async def run() -> None:
+        with respx.mock:
+            respx.get(URL).mock(
+                side_effect=[
+                    httpx.Response(
+                        429,
+                        json={
+                            "error": {"code": "RATE_LIMITED", "message": "x", "details": {"retry_after_seconds": "3"}}
+                        },
+                    ),
+                    httpx.Response(200, json={"data": {"epoch_ms": 1, "iso": "2026-01-01T00:00:00Z"}}),
+                ]
+            )
+            fc = FakeClock()
+            async with cexy.AsyncClient(max_retries=0) as client:
+                client._transport._sleep = fc.asleep
+                client._transport._clock = fc.clock
+                with pytest.raises(cexy.RateLimitError):
+                    await client.time()
+                await client.time()
+            assert len(fc.sleeps) == 1 and 3 <= fc.sleeps[0] <= 3.25
+
+    asyncio.run(run())
+
+
+@respx.mock
+def test_hint_above_120s_fails_at_once_but_holds_the_limiter_for_120s() -> None:
+    respx.get(URL).mock(
+        side_effect=[
+            httpx.Response(
+                429, json={"error": {"code": "RATE_LIMITED", "message": "x"}}, headers={"Retry-After": "500"}
+            ),
+            httpx.Response(200, json={"data": {"epoch_ms": 1, "iso": "2026-01-01T00:00:00Z"}}),
+        ]
+    )
+    fc = FakeClock()
+    client = cexy.Client()  # default retries: a hint above 120 s still raises without waiting
+    client._transport._sleep = fc.sleep
+    client._transport._clock = fc.clock
+    with pytest.raises(cexy.RateLimitError) as ei:
+        client.time()
+    assert ei.value.retry_after == 500 and fc.sleeps == []
+    client.time()
+    assert fc.sleeps == [120.0]
+
+
+def test_limiter_keeps_the_later_hold() -> None:
+    from cexy._ratelimit import MAX_WAIT_S, TokenBucket
+
+    now = [0.0]
+    bucket = TokenBucket(per_minute=6000, burst=1000, clock=lambda: now[0])
+    bucket.block_for(5)
+    bucket.block_for(2)  # a later, shorter hint never shortens the hold (H-3)
+    assert 5 <= bucket.acquire() <= 5.25
+    now[0] = 1.0
+    bucket.block_for(10)  # a longer one extends it
+    assert 10 <= bucket.acquire() <= 10.25
+    bucket.block_for(1e9)  # capped
+    assert bucket.acquire() == MAX_WAIT_S
+    for bad in (0, -1, float("nan"), float("inf"), "x"):
+        bucket.block_for(bad)  # type: ignore[arg-type]
+    now[0] = 1000.0
+    assert bucket.acquire() == 0
+
+
+def test_retry_after_numeric_string_body() -> None:
+    from cexy.errors import retry_after_seconds
+
+    assert retry_after_seconds({}, {"retry_after_seconds": "7"}) == 7
+    assert retry_after_seconds({"Retry-After": "2"}, {"retry_after_seconds": " 5.5 "}) == 5.5
+    assert retry_after_seconds({"Retry-After": "9"}, {"retry_after_seconds": "5"}) == 9
+    for bad in ("nan", "inf", "-3", "abc", ""):
+        assert retry_after_seconds({}, {"retry_after_seconds": bad}) is None

@@ -3,6 +3,19 @@
 All notable changes to this project are documented here. The SDK stays at 0.x until API
 request signing (HMAC) ships; see "Versioning" in README.md.
 
+## Unreleased
+
+### Changed
+- A 429 with a `Retry-After` / `details.retry_after_seconds` hint now holds the client's shared rate
+  limiter: every request (other threads and tasks included) waits out the hint, with 0 to 250 ms of
+  jitter on release. A later, shorter hint never shortens the hold. The hold is capped at 120 s; a hint
+  above 120 s still fails that request at once, and holds the client for 120 s. Shared conformance cases:
+  `header_and_body_disagree_the_longer_wins`, `body_seconds_as_a_numeric_string`.
+
+### Fixed
+- `details.retry_after_seconds` given as a numeric string (e.g. `"5"`) is now honoured, as in the
+  TypeScript, Go and Rust SDKs; unusable values are still ignored.
+
 ## 0.1.0.dev14 (2026-10-07)
 
 ### Added

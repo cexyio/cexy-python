@@ -31,6 +31,7 @@ from cexy.errors import (
     CexyConnectionError,
     MissingCredentialsError,
     from_response,
+    retry_after_seconds,
 )
 
 logger = logging.getLogger("cexy")
@@ -213,6 +214,12 @@ class AsyncTransport:
                     )
                 skew_resent = True  # one re-signed resend, outside the retry budget
                 continue
+            if resp.status_code == 429:
+                # Shared hold: every request of this client waits out the server's hint, not only
+                # this one. A hint above 120 s holds for 120 s (the limiter caps it).
+                hint = retry_after_seconds(resp_headers, err.details)
+                if hint is not None:
+                    self.limiter.block_for(hint)
             if on_retry_error is not None and attempt > 0:
                 # An earlier attempt may have reached the server after all.
                 recovered = await on_retry_error(err)
