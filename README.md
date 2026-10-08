@@ -141,6 +141,33 @@ asyncio.run(main())
 ```
 
 
+### Market buys by total
+
+A market buy can name a budget, `quote_quantity`, instead of a `quantity`: "spend at most this
+much of the quote asset".
+
+```python
+client.trading.place_order("BTC/USDT", "buy", "market", quote_quantity="50.00")
+```
+
+- **The taker fee is inside the budget:** `filled_quote_quantity + fee_paid <= quote_quantity`,
+  always. A stop-market buy by total reserves exactly the budget.
+- The budget must be at least the market's `min_notional`. It may have at most the market's price
+  decimals. More decimals are refused with 400 `PRECISION_EXCEEDED`, never rounded. Trailing
+  zeros are fine.
+- **How it ends:** `filled`, with no `status_reason`, when the budget was used (what is left
+  cannot buy one lot at the last fill price). The last WebSocket frame is then `order.filled`.
+  Otherwise it ends `cancelled` with a `status_reason`, for example `Insufficient liquidity to
+  fill the remainder` (fills, but the book ran out) or `Budget exhausted` (no fill; the budget
+  cannot buy one lot).
+- After a server restart mid-order, a budget order can end `cancelled` with `Interrupted; the
+  unfilled remainder was cancelled`. Its fills stand and the rest is released: treat it like any
+  partial fill.
+- **Reading one:** `quantity` and `remaining_quantity` are `0` for a budget order. Progress is
+  `filled_quote_quantity + fee_paid` against `quote_quantity`. Never divide by `quantity`.
+- A budget bounds the money spent, not the price paid. On a thin book a market buy can fill far
+  from the last price.
+
 ## Amounts
 
 The API sends every amount as a decimal string. The SDK parses them into
