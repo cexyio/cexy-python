@@ -2572,8 +2572,8 @@
         "tags": [
           "trading"
         ],
-        "summary": "Cancels every open order, and every stop order that has not triggered, optionally within",
-        "description": "one market.\n\nBest-effort: a failure on one order does not stop the rest, and every outcome is reported. A panic-button endpoint that stops at the first problem is worse than useless. A stop waiting for its trigger (`pending_trigger`) is cancelled too and its reservation released, so nothing fires into the market after the call.\n\nAn order still being placed when the call starts (status `pending`, for as long as its own placement request runs) is waited for, up to 500 ms per call in total: cancelled if it opens, reported in `already_closed` if it fills or is refused, and in `failed` with code `INVALID_STATE` if it is still being placed at the deadline. Orders placed after the call starts are not part of it. At most 500 orders per call; `has_more` says there are others.\n\nLimited to 30 calls a minute per account, on top of the general request limit.",
+        "summary": "Cancels every open order and untriggered stop, optionally in one market.",
+        "description": "Every open order, and every stop order that has not triggered, is cancelled; with `symbol`, only that market's.\n\nBest-effort: a failure on one order does not stop the rest, and every outcome is reported. A panic-button endpoint that stops at the first problem is worse than useless. A stop waiting for its trigger (`pending_trigger`) is cancelled too and its reservation released, so nothing fires into the market after the call.\n\nAn order still being placed when the call starts (status `pending`, for as long as its own placement request runs) is waited for, up to 500 ms per call in total: cancelled if it opens, reported in `already_closed` if it fills or is refused, and in `failed` with code `INVALID_STATE` if it is still being placed at the deadline. Orders placed after the call starts are not part of it. At most 500 orders per call; `has_more` says there are others.\n\nLimited to 30 calls a minute per account, on top of the general request limit.",
         "operationId": "cancel_all",
         "requestBody": {
           "content": {
@@ -2641,8 +2641,8 @@
         "tags": [
           "trading"
         ],
-        "summary": "Arms the dead-man switch: unless armed again within `timeout_ms`, every open order (and",
-        "description": "untriggered stop) in scope is cancelled, as by `POST /trading/orders/cancel-all`.\n\nArm it again before it runs out to keep quoting \u2014 for example every 2 seconds with a 10-second timeout \u2014 and if the program quoting stops, its orders are cancelled about a second after the deadline. Once fired, the switch is cleared: quoting again needs a new arm. `timeout_ms` of `0` disarms it. A per-market switch and the all-markets switch are separate, and each fires on its own.\n\nA halt does not stop it: cancelling is always allowed. Accounts the exchange quotes from must keep one armed for each market they place orders in, and are refused with `DEAD_MAN_NOT_ARMED` (409, `details.market`) otherwise; such a refusal means \"stop quoting\", not \"retry\".",
+        "summary": "Arms or disarms the dead-man switch (cancel-all-after).",
+        "description": "Unless armed again within `timeout_ms`, every open order (and untriggered stop) in scope is cancelled, as by `POST /trading/orders/cancel-all`.\n\nArm it again before it runs out to keep quoting \u2014 for example every 2 seconds with a 10-second timeout \u2014 and if the program quoting stops, its orders are cancelled about a second after the deadline. Once fired, the switch is cleared: quoting again needs a new arm. `timeout_ms` of `0` disarms it. A per-market switch and the all-markets switch are separate, and each fires on its own. Omit `symbol` for the all-markets switch; an empty `symbol` is refused. An account holds at most 50 armed deadlines. An account that may not trade (a suspended house account, for one) cannot arm or re-arm, only disarm.\n\nA halt does not stop it: cancelling is always allowed. Accounts the exchange quotes from must keep one armed for each market they place orders in, and are refused with `DEAD_MAN_NOT_ARMED` (409, `details.market`) otherwise; such a refusal means \"stop quoting\", not \"retry\".",
         "operationId": "cancel_all_after",
         "requestBody": {
           "content": {
@@ -2674,7 +2674,17 @@
             }
           },
           "400": {
-            "description": "`timeout_ms` is neither 0 nor between 5000 and 600000",
+            "description": "VALIDATION_FAILED: `timeout_ms` is neither 0 nor between 5000 and 600000; `symbol` is empty (omit it for all markets); or arming would exceed the account's 50 active deadlines",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account may not trade (ACCOUNT_ON_HOLD for a restricted account), so it cannot arm; disarming is allowed",
             "content": {
               "application/json": {
                 "schema": {
@@ -3828,7 +3838,7 @@
         "properties": {
           "symbol": {
             "type": "string",
-            "description": "One market's orders only. Omitted or `null`, the switch covers every market. A per-market switch and the all-markets switch are separate: each fires on its own.",
+            "description": "One market's orders only. Omitted or `null`, the switch covers every market; an empty string is refused (400). A per-market switch and the all-markets switch are separate: each fires on its own.",
             "example": "BTC/USDT",
             "nullable": true
           },
@@ -3864,7 +3874,7 @@
           "server_time": {
             "type": "string",
             "format": "date-time",
-            "description": "The server's clock when the switch was set, to measure the deadline against."
+            "description": "The server's time after the deadline was stored, to measure the deadline against."
           },
           "symbol": {
             "type": "string",

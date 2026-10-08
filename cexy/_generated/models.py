@@ -46,7 +46,7 @@ class CancelAllAfterRequest(BaseModel):
     symbol: Annotated[
         Optional[str],
         Field(
-            description="One market's orders only. Omitted or `null`, the switch covers every market. A per-market switch and the all-markets switch are separate: each fires on its own.",
+            description="One market's orders only. Omitted or `null`, the switch covers every market; an empty string is refused (400). A per-market switch and the all-markets switch are separate: each fires on its own.",
             examples=["BTC/USDT"],
         ),
     ] = None
@@ -79,7 +79,7 @@ class CancelAllAfterResponse(BaseModel):
     ] = None
     server_time: Annotated[
         AwareDatetime,
-        Field(description="The server's clock when the switch was set, to measure the deadline against."),
+        Field(description="The server's time after the deadline was stored, to measure the deadline against."),
     ]
     symbol: Annotated[
         Optional[str],
