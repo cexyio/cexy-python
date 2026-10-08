@@ -327,6 +327,13 @@ responses carry `X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Re
 never blocks longer than 120 s because of these headers. A 429 is retried after the server's
 `Retry-After` (at most 120 s; see above).
 
+After a 429 with a usable hint, the **whole client** waits at least the longer of `Retry-After` and
+`details.retry_after_seconds` (a numeric string is accepted) before it sends anything else, including
+requests from other threads or tasks, plus 0 to 250 ms of jitter so held requests do not fire at the
+same instant. A later, shorter hint never shortens a hold. A wait above 120 s fails the request at
+once (it is not retried) and holds the client for 120 s. Why: a key that keeps retrying past its own
+limit counts on its IP address's key-attempt limit, which can lock out other keys on that address.
+
 ## WebSocket
 
 ```python

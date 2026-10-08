@@ -11,6 +11,7 @@ no wait exceeds 120 s.
 from __future__ import annotations
 
 import math
+import random
 import threading
 import time
 from typing import Callable, Mapping, Optional
@@ -18,6 +19,10 @@ from typing import Callable, Mapping, Optional
 #: The limiter never blocks longer than this because of a server hint (same as the transport's
 #: MAX_SERVER_WAIT_S).
 MAX_WAIT_S = 120.0
+
+#: Jitter (0 to this many seconds) added to a wait caused by a server hold, so requests held by
+#: the same 429 do not all fire at the same instant.
+HOLD_JITTER_S = 0.25
 
 
 class TokenBucket:
@@ -47,11 +52,25 @@ class TokenBucket:
         with self._lock:
             now = self._clock()
             self._refill(now)
-            wait = max(0.0, self._blocked_until - now)
+            held = max(0.0, self._blocked_until - now)
+            wait = held
             self.tokens -= 1.0
             if self.tokens < 0:
                 wait = max(wait, -self.tokens / self.rate)
+            if held > 0:
+                wait += random.uniform(0, HOLD_JITTER_S)  # noqa: S311
             return min(wait, MAX_WAIT_S)
+
+    def block_for(self, seconds: float) -> None:
+        """Hold every request until ``seconds`` from now (a 429 hint: ``Retry-After`` or
+        ``details.retry_after_seconds``). Capped at ``MAX_WAIT_S``, so a hint above 120 s still
+        holds the client for 120 s (the failing request itself is not retried). An existing,
+        later hold is never shortened. Unusable values (not finite, <= 0) are ignored."""
+        if not isinstance(seconds, (int, float)) or not math.isfinite(seconds) or seconds <= 0:
+            return
+        with self._lock:
+            until = self._clock() + min(float(seconds), MAX_WAIT_S)
+            self._blocked_until = max(self._blocked_until, until)
 
     def pending_wait(self) -> float:
         """How long the next ``acquire()`` would make the caller sleep, without taking a token."""

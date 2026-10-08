@@ -1,5 +1,5 @@
 {
-  "description": "Server-controlled waits (all SDKs, REST). Retry-After (seconds or HTTP-date), details.retry_after_seconds and X-RateLimit-Reset are untrusted: an SDK must never panic, overflow or hang on them. Rules: a missing, unparseable, negative, non-finite or absurd value is ignored (the normal backoff applies). A usable value above MAX_SERVER_WAIT_S (120) is NOT waited: the call fails at once with the rate-limit error, which still exposes the server's value. The client-side rate limiter never blocks longer than MAX_SERVER_WAIT_S because of a server hint. Each case is one GET /api/v1/time with the SDK's default retries (3); `responses` are served in order (the last repeats); the runner records sleeps with a fake clock. SDKs may add up to 1 s of jitter to a Retry-After wait, so waits compare within [expected, expected + 1].",
+  "description": "Server-controlled waits (all SDKs, REST). Retry-After (seconds or HTTP-date), details.retry_after_seconds and X-RateLimit-Reset are untrusted: an SDK must never panic, overflow or hang on them. Rules: when the header and details.retry_after_seconds disagree, the longer wait applies; details may carry a number or a numeric string. A missing, unparseable, negative, non-finite or absurd value is ignored (the normal backoff applies). A usable value above MAX_SERVER_WAIT_S (120) is NOT waited: the call fails at once with the rate-limit error, which still exposes the server's value. The client-side rate limiter never blocks longer than MAX_SERVER_WAIT_S because of a server hint. Each case is one GET /api/v1/time with the SDK's default retries (3); `responses` are served in order (the last repeats); the runner records sleeps with a fake clock. SDKs may add up to 1 s of jitter to a Retry-After wait, so waits compare within [expected, expected + 1].",
   "max_server_wait_s": 120,
   "cases": [
     {
@@ -30,6 +30,73 @@
         "calls": 2,
         "sleeps_s": [
           5
+        ],
+        "ok": true
+      }
+    },
+    {
+      "id": "header_and_body_disagree_the_longer_wins",
+      "responses": [
+        {
+          "http_status": 429,
+          "headers": {
+            "Retry-After": "1"
+          },
+          "error": {
+            "code": "RATE_LIMITED",
+            "message": "x",
+            "retryable": true,
+            "details": {
+              "retry_after_seconds": 5
+            }
+          }
+        },
+        {
+          "http_status": 200,
+          "body": {
+            "data": {
+              "epoch_ms": 1,
+              "iso": "1970-01-01T00:00:00.001Z"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "calls": 2,
+        "sleeps_s": [
+          5
+        ],
+        "ok": true
+      }
+    },
+    {
+      "id": "body_seconds_as_a_numeric_string",
+      "responses": [
+        {
+          "http_status": 429,
+          "error": {
+            "code": "RATE_LIMITED",
+            "message": "x",
+            "retryable": true,
+            "details": {
+              "retry_after_seconds": "4"
+            }
+          }
+        },
+        {
+          "http_status": 200,
+          "body": {
+            "data": {
+              "epoch_ms": 1,
+              "iso": "1970-01-01T00:00:00.001Z"
+            }
+          }
+        }
+      ],
+      "expect": {
+        "calls": 2,
+        "sleeps_s": [
+          4
         ],
         "ok": true
       }
