@@ -5,12 +5,21 @@ request signing (HMAC) ships; see "Versioning" in README.md.
 
 ## Unreleased
 
+## 0.1.0.dev15 (2026-10-09)
+
 ### Changed
 - A 429 with a `Retry-After` / `details.retry_after_seconds` hint now holds the client's shared rate
   limiter: every request (other threads and tasks included) waits out the hint, with 0 to 250 ms of
   jitter on release. A later, shorter hint never shortens the hold. The hold is capped at 120 s; a hint
   above 120 s still fails that request at once, and holds the client for 120 s. Shared conformance cases:
   `header_and_body_disagree_the_longer_wins`, `body_seconds_as_a_numeric_string`.
+- README, rate limits: after a 429 with a wait hint the client holds every request, not only the
+  retried one. A key that keeps sending through its own limit counts against its IP's failed-key limit
+  (120 a minute); market makers should send their cancel/risk key from its own egress IP.
+- README, "Market buys by total": a market buy by `quote_quantity` spends at most the budget, taker fee
+  included (`filled_quote_quantity + fee_paid <= quote_quantity`); the precision rule
+  (`PRECISION_EXCEEDED`), how a budget order ends and how to read its progress.
+- Built against cexy-api-spec `b0451a0` (`place_order` description text only; no model change).
 
 ### Fixed
 - `details.retry_after_seconds` given as a numeric string (e.g. `"5"`) is now honoured, as in the
