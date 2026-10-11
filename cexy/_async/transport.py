@@ -39,8 +39,14 @@ logger = logging.getLogger("cexy")
 
 #: Network errors raised before the request could have reached the server.
 _NOT_SENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
-#: 5xx statuses where the server may or may not have acted.
-_AMBIGUOUS_STATUS = frozenset({500, 502, 504})
+
+
+def is_ambiguous_status(status: int) -> bool:
+    """A 5xx where the server may or may not have acted: every 5xx except 501 (not implemented)
+    and 503 (refused before acting), so 500, 502, 504 and Cloudflare's 520 and 524 included."""
+    return 500 <= status < 600 and status not in (501, 503)
+
+
 #: Mutations that are safe to repeat without an Idempotency-Key: place_order and place_batch (a
 #: client_order_id makes the server refuse a repeat; see ``recover`` and ``attempts``),
 #: cancel_order, cancel_order_by_client_id, cancel_batch and cancel_all (cancelling twice changes
@@ -231,7 +237,7 @@ class AsyncTransport:
 
             err = from_response(resp.status_code, _json_or_none(resp), resp_headers, self._secrets())
             if attempts is not None:
-                attempts.append("ambiguous" if resp.status_code in _AMBIGUOUS_STATUS else "refused")
+                attempts.append("ambiguous" if is_ambiguous_status(resp.status_code) else "refused")
             if err.code == "SIGNATURE_REQUIRED":
                 raise type(err)(
                     err.code,
@@ -273,9 +279,11 @@ class AsyncTransport:
                 # Shared hold: every request of this client waits out the server's hint, not only
                 # this one. A hint above 120 s holds for 120 s (the limiter caps it).
                 hint = retry_after_seconds(resp_headers, err.details)
+                placements_held = False
                 if hint is not None:
                     if (err.details or {}).get("limit") == ORDER_ACTIONS_LIMIT:
                         self._hold_placements(hint)
+                        placements_held = order_actions > 0
                     else:
                         self.limiter.block_for(hint)
             if on_retry_error is not None and attempt > 0:
@@ -295,11 +303,13 @@ class AsyncTransport:
                     MAX_SERVER_WAIT_S,
                 )
                 raise err
-            if recover is not None and resp.status_code in _AMBIGUOUS_STATUS:
+            if recover is not None and is_ambiguous_status(resp.status_code):
                 recovered = await recover()
                 if recovered is not None:
                     return recovered
             delay = self.policy.delay_for(err, attempt)
+            if resp.status_code == 429 and placements_held:
+                delay = 0.0  # the next attempt waits out the placement hold itself
             logger.debug("cexy: retrying %s %s after %s in %.2fs", op.method, op.path, err.code, delay)
             await self._sleep(delay)
             attempt += 1

@@ -19,8 +19,18 @@ request signing (HMAC) ships; see "Versioning" in README.md.
 - `ApiKeyResponse.rate_tier` (`default` or `mm`).
 - Shared conformance cases: `trading/batch_orders.json`.
 
+- An error raised by `place_orders` (or `place_order`) after the request may have been sent carries
+  `client_order_ids` (in request order, generated ones included) and `maybe_placed`.
+  `cexy.new_client_order_id()` makes ids to save before the call. `BatchResponseError`: a 200 without
+  data, undecodable, or whose results do not match the request.
+
 ### Changed
 - A batch takes one limiter token per order or entry.
+- Every 5xx except 501 and 503 (Cloudflare 520 and 524 included) counts as "the server may have
+  acted" for recovery.
+- A batch item error that names an order (`details.order_id`, e.g. `MARKET_UNAVAILABLE`) is reported
+  `recovered` on any attempt; an item `INTERNAL` error is looked up once by client order id.
+- An `order_actions` 429 on a placement waits once (the placement hold), not twice.
 - A 429 with `details.limit` `order_actions` holds only placements for its wait, not the whole client.
 
 ## 0.1.0.dev15 (2026-10-09)

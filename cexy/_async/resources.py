@@ -7,7 +7,7 @@ Every public method maps to exactly one allowlisted API operation (``@operation`
 
 from __future__ import annotations
 
-import uuid
+import json
 from datetime import datetime
 from typing import Any, AsyncIterator, List, Literal, Mapping, Optional, Sequence, Union, overload
 
@@ -17,12 +17,17 @@ from cexy._batch import (
     BatchCancelResult,
     BatchOrderOutcome,
     BatchPlaceResult,
+    BatchResponseError,
     CancelEntryOutcome,
+    attach_client_order_ids,
     cancel_from_result,
     cancel_result,
     check_cancel,
+    check_cancel_results,
     check_place,
+    check_results,
     needs_lookup,
+    new_client_order_id,
     place_from_result,
     place_result,
 )
@@ -468,8 +473,11 @@ class AsyncTrading(_Resource):
         order is returned (``fills`` is then empty: query ``trading.trades`` for them),
         otherwise the order is resent with the same ``client_order_id``. If a retry is
         refused as ``ALREADY_EXISTS``, the existing order is fetched and returned.
+
+        An error raised after the request may have been sent carries ``client_order_ids`` (the
+        one id) and ``maybe_placed``, as ``place_orders`` does.
         """
-        cid = client_order_id or str(uuid.uuid4())
+        cid = client_order_id or new_client_order_id()
         body = {
             "symbol": symbol,
             "side": _enum_value(side),
@@ -494,9 +502,19 @@ class AsyncTrading(_Resource):
             # The duplicate client_order_id means an earlier attempt placed the order.
             return await recover() if err.code == "ALREADY_EXISTS" else None
 
-        payload = await self._t.request(
-            "place_order", body=body, recover=recover, on_retry_error=on_retry_error, order_actions=1
-        )
+        attempts: List[str] = []
+        try:
+            payload = await self._t.request(
+                "place_order",
+                body=body,
+                recover=recover,
+                on_retry_error=on_retry_error,
+                order_actions=1,
+                attempts=attempts,
+            )
+        except BaseException as exc:
+            attach_client_order_ids(exc, [cid], attempts)
+            raise
         return m.PlaceOrderResponse.model_validate(_data(payload))
 
     @operation("cancel_order")
@@ -569,18 +587,27 @@ class AsyncTrading(_Resource):
                 "stop_price": to_wire_opt(o.get("stop_price"), "stop_price"),
                 "time_in_force": _enum_value(o.get("time_in_force")),
                 "trigger_direction": _enum_value(o.get("trigger_direction")),
-                "client_order_id": o.get("client_order_id") or str(uuid.uuid4()),
+                "client_order_id": o.get("client_order_id") or new_client_order_id(),
             }
             items.append({k: v for k, v in item.items() if v is not None})
+        cids = [item["client_order_id"] for item in items]
         attempts: List[str] = []
-        payload = await self._t.request(
-            "place_batch",
-            body={"symbol": symbol, "orders": items},
-            cost=len(items),
-            order_actions=len(items),
-            attempts=attempts,
-        )
-        data = m.BatchOrderResponse.model_validate(_data(payload))
+        try:
+            try:
+                payload = await self._t.request(
+                    "place_batch",
+                    body={"symbol": symbol, "orders": items},
+                    cost=len(items),
+                    order_actions=len(items),
+                    attempts=attempts,
+                )
+            except json.JSONDecodeError as exc:
+                raise BatchResponseError("place_orders: an undecodable 200") from exc
+            data = check_results(cids, payload)
+        except BaseException as exc:
+            # The orders may be live: the caller needs every id to reconcile (cancelled tasks too).
+            attach_client_order_ids(exc, cids, attempts)
+            raise
         after_ambiguous = "ambiguous" in attempts
         results: List[BatchOrderOutcome] = []
         for r in data.results:
@@ -597,7 +624,7 @@ class AsyncTrading(_Resource):
                 "get_order_by_client_id", path={"client_order_id": o.client_order_id}, max_retries=0
             )
             order = m.OrderResponse.model_validate(_data(payload))
-        except (CexyApiError, CexyConnectionError):
+        except Exception:  # any failure to read it, a bad body included: unknown, never re-placed
             return BatchOrderOutcome(o.index, o.client_order_id, "unknown", error=o.error)
         status = _enum_value(order.status)
         return BatchOrderOutcome(o.index, o.client_order_id, "recovered", order.id, status, order, error=o.error)
@@ -614,8 +641,13 @@ class AsyncTrading(_Resource):
         """
         entries = check_cancel(orders)
         attempts: List[str] = []
-        payload = await self._t.request("cancel_batch", body={"orders": entries}, cost=len(entries), attempts=attempts)
-        data = m.CancelBatchResponse.model_validate(_data(payload))
+        try:
+            payload = await self._t.request(
+                "cancel_batch", body={"orders": entries}, cost=len(entries), attempts=attempts
+            )
+        except json.JSONDecodeError as exc:
+            raise BatchResponseError("cancel_orders: an undecodable 200") from exc
+        data = check_cancel_results(len(entries), payload)
         after_ambiguous = "ambiguous" in attempts
         results: List[CancelEntryOutcome] = []
         for r in data.results:
@@ -634,7 +666,7 @@ class AsyncTrading(_Resource):
                     "get_order_by_client_id", path={"client_order_id": o.client_order_id or ""}, max_retries=0
                 )
             order = m.OrderResponse.model_validate(_data(payload))
-        except (CexyApiError, CexyConnectionError):
+        except Exception:  # any failure to read it, a bad body included
             return CancelEntryOutcome(o.index, "unknown", o.order_id, o.client_order_id, error=o.error)
         status = _enum_value(order.status)
         return CancelEntryOutcome(o.index, "recovered", order.id, o.client_order_id, status, order, o.error)

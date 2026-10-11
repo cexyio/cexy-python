@@ -112,7 +112,14 @@ class CancelBatchItem(BaseModel):
     model_config = ConfigDict(
         extra="allow",
     )
-    client_order_id: Annotated[Optional[str], Field(description="Your identifier for it.")] = None
+    client_order_id: Annotated[
+        Optional[str],
+        Field(
+            description="Your identifier for it.",
+            max_length=64,
+            pattern="^[A-Za-z0-9_\\-.:]{1,64}$",
+        ),
+    ] = None
     order_id: Annotated[Optional[str], Field(description="The order's id.")] = None
 
 
@@ -1656,6 +1663,8 @@ class BatchOrderItem(BaseModel):
         Field(
             description="Your own identifier, unique per account. Required: a retry of the batch is answered `ALREADY_EXISTS` for every order it already placed, so nothing is placed twice.",
             examples=["q-1717171717-001"],
+            max_length=64,
+            pattern="^[A-Za-z0-9_\\-.:]{1,64}$",
         ),
     ]
     price: Annotated[
@@ -2244,7 +2253,14 @@ class PlaceOrderRequest(BaseModel):
     model_config = ConfigDict(
         extra="allow",
     )
-    client_order_id: Annotated[Optional[str], Field(description="Your own identifier. Unique per account.")] = None
+    client_order_id: Annotated[
+        Optional[str],
+        Field(
+            description="Your own identifier. Unique per account.",
+            max_length=64,
+            pattern="^[A-Za-z0-9_\\-.:]{1,64}$",
+        ),
+    ] = None
     price: Annotated[
         Optional[Decimal],
         Field(

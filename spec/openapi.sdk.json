@@ -2621,7 +2621,9 @@
             "description": "Your identifier",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_\\-.:]{1,64}$"
             }
           }
         ],
@@ -2679,7 +2681,9 @@
             "description": "Your identifier",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_\\-.:]{1,64}$"
             }
           }
         ],
@@ -4114,7 +4118,9 @@
           "client_order_id": {
             "type": "string",
             "description": "Your own identifier, unique per account. Required: a retry of the batch is answered `ALREADY_EXISTS` for every order it already placed, so nothing is placed twice.",
-            "example": "q-1717171717-001"
+            "example": "q-1717171717-001",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9_\\-.:]{1,64}$"
           },
           "price": {
             "allOf": [
@@ -4388,7 +4394,9 @@
           "client_order_id": {
             "type": "string",
             "description": "Your identifier for it.",
-            "nullable": true
+            "nullable": true,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9_\\-.:]{1,64}$"
           },
           "order_id": {
             "type": "string",
@@ -6520,7 +6528,9 @@
           "client_order_id": {
             "type": "string",
             "description": "Your own identifier. Unique per account.",
-            "nullable": true
+            "nullable": true,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9_\\-.:]{1,64}$"
           },
           "price": {
             "allOf": [

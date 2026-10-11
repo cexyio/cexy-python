@@ -68,9 +68,44 @@ def with_orders(data: Dict[str, Any]) -> Dict[str, Any]:
 def reply(item: Dict[str, Any], data_fn: Callable[[Dict[str, Any]], Dict[str, Any]] = with_orders) -> Any:
     if "network_error" in item:
         raise httpx.ReadTimeout("lost response")
+    if "text" in item:
+        return httpx.Response(item["http_status"], text=item["text"])
+    if "body" in item:
+        return httpx.Response(item["http_status"], json=item["body"])
     if item["http_status"] == 200:
         return httpx.Response(200, json={"data": data_fn(item["data"])})
     return httpx.Response(item["http_status"], json={"error": item["error"]}, headers=item.get("headers") or {})
+
+
+def echo_placed(request: httpx.Request) -> httpx.Response:
+    """A place-batch 200 that places every order sent, in order."""
+    sent = json.loads(request.content)["orders"]
+    results = [
+        {
+            "index": i,
+            "client_order_id": o["client_order_id"],
+            "order": order({"id": f"o{i}"}),
+            "fills": [],
+            "error": None,
+        }
+        for i, o in enumerate(sent)
+    ]
+    return httpx.Response(200, json={"data": {"placed": len(sent), "failed": 0, "results": results}})
+
+
+def echo_cancelled(request: httpx.Request) -> httpx.Response:
+    sent = json.loads(request.content)["orders"]
+    results = [
+        {
+            "index": i,
+            "order_id": e.get("order_id"),
+            "client_order_id": e.get("client_order_id"),
+            "order": order({"id": e.get("order_id") or f"o{i}", "status": "cancelled"}),
+            "error": None,
+        }
+        for i, e in enumerate(sent)
+    ]
+    return httpx.Response(200, json={"data": {"cancelled": len(sent), "failed": 0, "results": results}})
 
 
 class Server:
@@ -130,8 +165,20 @@ def check_common(case: Dict[str, Any], srv: Server, res: Any, transport: Any) ->
     if exp.get("hold") == "placements":
         assert transport._placements_held_until > 0
         assert transport.limiter._blocked_until == 0
-    if exp.get("error") == "connection":
-        assert isinstance(res, cexy.CexyConnectionError)
+    if exp.get("error") == "batch":
+        assert isinstance(res, BaseException), res
+        cause = exp["cause"]
+        if cause == "connection":
+            assert isinstance(res, cexy.CexyConnectionError)
+        elif cause == "bad_response":
+            assert isinstance(res, cexy.BatchResponseError)
+        else:
+            assert isinstance(res, cexy.CexyApiError) and res.code == cause
+        if "error_details_limit" in exp:
+            assert res.details["limit"] == exp["error_details_limit"]
+        assert res.maybe_placed is exp["maybe_placed"]  # type: ignore[attr-defined]
+        sent = [o["client_order_id"] for o in json.loads(srv.bodies[0])["orders"]]
+        assert res.client_order_ids == sent  # type: ignore[attr-defined]
     elif "error_code" in exp and "results" not in exp:
         assert isinstance(res, cexy.CexyApiError) and res.code == exp["error_code"]
         if "error_details_limit" in exp:
@@ -170,13 +217,13 @@ def test_place_conformance(case: Dict[str, Any], mode: str) -> None:
                 c = sync_client(fc)
                 try:
                     res = c.trading.place_orders(req["symbol"], req["orders"])
-                except (cexy.CexyApiError, cexy.CexyConnectionError) as exc:
+                except cexy.CexyError as exc:
                     res = exc
             else:
                 c = async_client(fc)
                 try:
                     res = await c.trading.place_orders(req["symbol"], req["orders"])
-                except (cexy.CexyApiError, cexy.CexyConnectionError) as exc:
+                except cexy.CexyError as exc:
                     res = exc
             check_common(case, srv, res, c._transport)
             exp = case["expect"]
@@ -184,7 +231,9 @@ def test_place_conformance(case: Dict[str, Any], mode: str) -> None:
                 check_results(exp, res, "place")
             for i in exp.get("generated_cid_indexes", []):
                 sent = json.loads(srv.bodies[0])["orders"][i]["client_order_id"]
-                assert CLIENT_ORDER_ID.fullmatch(sent) and res.results[i].client_order_id == sent
+                assert CLIENT_ORDER_ID.fullmatch(sent)
+                got = res.client_order_ids[i] if isinstance(res, BaseException) else res.results[i].client_order_id
+                assert got == sent
 
     asyncio.run(go())
 
@@ -269,10 +318,10 @@ def test_valid_requests_are_sent(case: Dict[str, Any]) -> None:
             if "client_order_id" in case
             else expand(case, "place")
         )
-        route = respx.post(PLACE_URL).respond(json={"data": {"placed": 0, "failed": 0, "results": []}})
+        route = respx.post(PLACE_URL).mock(side_effect=echo_placed)
         c.trading.place_orders("BTC/USDT", orders)
     else:
-        route = respx.post(CANCEL_URL).respond(json={"data": {"cancelled": 0, "failed": 0, "results": []}})
+        route = respx.post(CANCEL_URL).mock(side_effect=echo_cancelled)
         c.trading.cancel_orders(expand(case, "cancel"))
     assert route.call_count == 1
 
@@ -299,8 +348,8 @@ def tokens_taken(c: cexy.Client, fn: Callable[[], Any]) -> float:
 def test_limiter_cost_per_call() -> None:
     n = 7
     c = sync_client(FakeClock())
-    respx.post(PLACE_URL).respond(json={"data": {"placed": 0, "failed": 0, "results": []}})
-    respx.post(CANCEL_URL).respond(json={"data": {"cancelled": 0, "failed": 0, "results": []}})
+    respx.post(PLACE_URL).mock(side_effect=echo_placed)
+    respx.post(CANCEL_URL).mock(side_effect=echo_cancelled)
     respx.delete(url__startswith=BY_ID).respond(json={"data": order({"id": "o1", "status": "cancelled"})})
     place = [{"side": "buy", "type": "market", "quantity": "1"} for _ in range(n)]
     got = {
@@ -324,9 +373,9 @@ def actions_taken(c: cexy.Client, fn: Callable[[], Any]) -> float:
 def test_order_actions_budget_counts_only_placements() -> None:
     n = 5
     c = sync_client(FakeClock(), order_actions_per_second=50)
-    respx.post(PLACE_URL).respond(json={"data": {"placed": 0, "failed": 0, "results": []}})
+    respx.post(PLACE_URL).mock(side_effect=echo_placed)
     respx.post(BASE + "/api/v1/trading/orders").respond(json={"data": {"order": order({"id": "o1"}), "fills": []}})
-    respx.post(CANCEL_URL).respond(json={"data": {"cancelled": 0, "failed": 0, "results": []}})
+    respx.post(CANCEL_URL).mock(side_effect=echo_cancelled)
     respx.delete(url__startswith=BY_ID).respond(json={"data": order({"id": "o1", "status": "cancelled"})})
     place = [{"side": "buy", "type": "market", "quantity": "1"} for _ in range(n)]
     got = {
@@ -347,7 +396,7 @@ def test_order_actions_hold_delays_placements_not_reads_or_cancels() -> None:
     c._transport._hold_placements(5)
     respx.get(BY_ID + "o1").respond(json={"data": order({"id": "o1"})})
     respx.delete(BY_ID + "o1").respond(json={"data": order({"id": "o1", "status": "cancelled"})})
-    respx.post(PLACE_URL).respond(json={"data": {"placed": 0, "failed": 0, "results": []}})
+    respx.post(PLACE_URL).mock(side_effect=echo_placed)
     c.trading.order("o1")
     c.trading.cancel_order("o1")
     assert fc.sleeps == []
@@ -377,7 +426,7 @@ def test_order_actions_per_second_must_be_positive(bad: Optional[Any]) -> None:
 
 @respx.mock
 def test_place_orders_wire_body() -> None:
-    route = respx.post(PLACE_URL).respond(json={"data": {"placed": 0, "failed": 0, "results": []}})
+    route = respx.post(PLACE_URL).mock(side_effect=echo_placed)
     from decimal import Decimal
 
     sync_client(FakeClock()).trading.place_orders(
@@ -412,3 +461,58 @@ def test_place_orders_wire_body() -> None:
 def test_place_orders_refuses_float_amounts() -> None:
     with pytest.raises((TypeError, ValueError)):
         sync_client(FakeClock()).trading.place_orders("BTC/USDT", [{"side": "buy", "type": "market", "quantity": 0.1}])
+
+
+@respx.mock
+def test_single_place_order_error_carries_its_id() -> None:
+    respx.post(BASE + "/api/v1/trading/orders").mock(side_effect=httpx.ReadTimeout("lost"))
+    respx.get(url__startswith=BY_CID).respond(
+        404, json={"error": {"code": "NOT_FOUND", "message": "x", "retryable": False}}
+    )
+    with pytest.raises(cexy.CexyConnectionError) as info:
+        sync_client(FakeClock()).trading.place_order("BTC/USDT", "buy", "market", quantity="1", client_order_id="s1")
+    assert info.value.client_order_ids == ["s1"]  # type: ignore[attr-defined]
+    assert info.value.maybe_placed is True  # type: ignore[attr-defined]
+
+
+def test_local_refusal_carries_nothing() -> None:
+    with pytest.raises(ValueError) as info:
+        sync_client(FakeClock()).trading.place_orders(
+            "BTC/USDT", [{"side": "buy", "type": "market", "quantity": "1", "client_order_id": ".."}]
+        )
+    assert not hasattr(info.value, "client_order_ids")
+
+
+def test_new_client_order_id_is_exported_and_valid() -> None:
+    a, b = cexy.new_client_order_id(), cexy.new_client_order_id()
+    assert a != b and CLIENT_ORDER_ID.fullmatch(a)
+
+
+@respx.mock
+def test_lookup_with_an_unusable_body_is_unknown() -> None:
+    def answer(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "placed": 0,
+                    "failed": 1,
+                    "results": [
+                        {
+                            "index": 0,
+                            "client_order_id": "c1",
+                            "order": None,
+                            "fills": [],
+                            "error": {"code": "INTERNAL", "message": "x", "retryable": False},
+                        }
+                    ],
+                }
+            },
+        )
+
+    respx.post(PLACE_URL).mock(side_effect=answer)
+    respx.get(BY_CID + "c1").respond(200, json={"data": {"id": 1}})
+    res = sync_client(FakeClock()).trading.place_orders(
+        "BTC/USDT", [{"side": "buy", "type": "market", "quantity": "1", "client_order_id": "c1"}]
+    )
+    assert [o.outcome for o in res.results] == ["unknown"] and res.unknown == 1
