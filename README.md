@@ -172,14 +172,15 @@ client.trading.cancel_order_by_client_id("my-id-1")
   server refuses every id it already placed, so nothing is placed twice. Such an order comes back as
   `recovered` with its `order_id` and `status`. An item error that names an order (`MARKET_UNAVAILABLE`
   when the market stopped while matching, or an `INTERNAL` error after the order was stored) is also
-  `recovered`: the order exists. A `rejected` status means the server refused it for funds and its
+  `recovered`: the order exists. A recovered order counts as placed unless its status is `rejected`,
+  even if it ended `cancelled` with nothing filled: read `status` before acting. A `rejected` status means the server refused it for funds and its
   id is spent: do not place it again under that id. `unknown` means its state could not be read; it
   was not placed again. **Reconcile every `unknown` with `order_by_client_id` before placing
   anything in its place.** A cancel that a retry finds already closed is looked up and comes back as
   `recovered` with its current status.
 - **When `place_orders` raises:** `exc.maybe_placed` is `False` only when every attempt was a
   definite refusal (a 400, 403, 404, 429, 501 or 503 with no earlier timeout or 5xx): nothing was
-  placed. It is `True` after a timeout, a lost connection, any other 5xx (Cloudflare's 520 and 524
+  placed. It is `True` after a read timeout, a connection lost after sending, any other 5xx (Cloudflare's 520 and 524
   included) or a 200 the SDK cannot use (`BatchResponseError`): some of the orders may be live, so
   look each id up before placing them again. A batch larger than the key's whole budget is a 400 with
   a number in `details["limit"]`: send fewer at a time. The SDK never splits a batch. A 429 is

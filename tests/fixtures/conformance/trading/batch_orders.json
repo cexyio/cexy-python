@@ -1,5 +1,5 @@
 {
- "description": "Batch place (POST /api/v1/trading/orders/batch), batch cancel (POST /api/v1/trading/orders/cancel-batch) and cancel by client order id (DELETE /api/v1/trading/orders/by-client-id/{client_order_id}). TS placeOrders / cancelOrders / cancelOrderByClientId, Python place_orders / cancel_orders / cancel_order_by_client_id, Go PlaceOrders / CancelOrders / CancelOrderByClientID, Rust place_orders / cancel_orders / cancel_order_by_client_id. The runner uses a fake clock and max retries 3. Each attempt item is one HTTP exchange for the batch call, in order: `network_error` (the request was sent and no answer came: an ambiguous failure), or `http_status` with `data` (a 200's `data` object) or `error` (the error body) and optional `headers`. `lookups` answers GET /trading/orders/by-client-id/{cid} (key `cid:<cid>`) and GET /trading/orders/{id} (key `order:<id>`), with the same item shapes; a lookup is sent at most once and is never retried. Rules: (1) the request body is built once, with every missing client_order_id generated before the first attempt, and every attempt sends the same body bytes (`expect.same_body`); each attempt is signed afresh. (2) An attempt is ambiguous when it ended in a network error after sending, in any HTTP 5xx except 501 and 503 (500, 502, 504, and Cloudflare's 520 and 524 included), or in a 200 the SDK cannot use: a body without `data`, an undecodable body, or results that do not match the request (a different count, or an item whose `index` or `client_order_id` is not the one sent at that position). A 429, 501, 503 or any other 4xx is a definite refusal: nothing was acted on. Which network errors count as 'after sending' is per language: an SDK that cannot tell a failed connect from a lost answer counts every network error as ambiguous (TypeScript, Rust); Python and Go count a failed connect as a refusal. (3) After the final 200, a place item's ALREADY_EXISTS, or a cancel entry's INVALID_STATE, is reinterpreted ONLY if an earlier attempt of this call was ambiguous; otherwise it is returned as the server sent it (the caller reused the id, or the order was closed before). (3b) On ANY attempt, a place item error OTHER than ALREADY_EXISTS that carries `details.order_id` (MARKET_UNAVAILABLE when the market stopped while matching, for example) means the order exists: it is `recovered` from details.order_id and details.status, with the rule (4) lookup when status is missing. A place item error with code INTERNAL and no `details.order_id` may follow a committed order: it gets the rule (4) lookup by client_order_id (found: `recovered`; not found or failed: `unknown`). (4) Place recovery: take order_id and status from the error's details; if either is missing, look the order up by client_order_id; if the lookup fails or answers 404, the item is `unknown`. Never place it again. (5) Cancel recovery: look the order up by order_id (or by client_order_id for a cid entry) and report its status; if the lookup fails, the item is `unknown`. (6) Outcomes: place `placed` (order set, no error), `failed` (error, not reinterpreted), `recovered` (status known), `unknown`; cancel `cancelled`, `failed`, `recovered`, `unknown`. Counts are recomputed from the outcomes, never copied from the server: place `placed` = placed + recovered whose status is not `rejected`; `failed` = failed + recovered `rejected`; cancel `cancelled` = cancelled + recovered whose status is `cancelled`; `failed` = failed + recovered with any other status; `unknown` counts the unknown items. (7) A 429 waits retry_after_seconds and is retried with the same body; details.limit `order_actions` holds only placements (place_order, place_orders) for that wait, not reads or cancels (`expect.hold`). (8) A whole-request 4xx other than 429 is raised at once and never retried; this includes the 400 whose details.limit is a number (the batch is larger than the key's whole budget; the SDK never splits it). (9) When place_orders raises after building its body (the request may have been sent), the error carries every client_order_id of the body, generated ones included, in request order, and `maybe_placed`: false only when every attempt was a definite refusal (rule 2); true after any ambiguous attempt, including the failing one, and for any failure that is not an HTTP answer (a network error, a cancelled call, a timeout, an unusable 200). Expected as `error: \"batch\"` with `cause` (the error code, `connection`, or `bad_response`), `maybe_placed`, and `error_cids: \"sent\"` (the cids in the first request body, in order). Local refusals (`validation`) raise before anything is built or sent and carry nothing. Every SDK exports its client_order_id generator so callers can create and save ids before the call. (10) A `.` or `..` client_order_id is refused locally: the server accepts it, but it cannot be used as a path segment to look the order up. `validation` cases are refused locally, before any request; `cid_path` cases give the encoded request path; `cost` gives the client limiter's request tokens and order actions per call. Every `order` object and every 200 lookup `data` is `order_template` overlaid with the fields given (wire names: the order id is `id`). Expected results name it `order_id`: for a placed or recovered-by-lookup item it is the order's `id`, for an item recovered from details it is details.order_id. `orders_count: N` means N limit buys with distinct generated client order ids. Attempt items may also be `{http_status, text}` (a body that is not JSON, sent as is) or `{http_status, body}` (the JSON body exactly as given, not wrapped in `data`). A cancel-batch entry by client_order_id `.` or `..` is also refused locally (rule 10).",
+ "description": "Batch place (POST /api/v1/trading/orders/batch), batch cancel (POST /api/v1/trading/orders/cancel-batch) and cancel by client order id (DELETE /api/v1/trading/orders/by-client-id/{client_order_id}). TS placeOrders / cancelOrders / cancelOrderByClientId, Python place_orders / cancel_orders / cancel_order_by_client_id, Go PlaceOrders / CancelOrders / CancelOrderByClientID, Rust place_orders / cancel_orders / cancel_order_by_client_id. The runner uses a fake clock and max retries 3. Each attempt item is one HTTP exchange for the batch call, in order: `network_error` (the request was sent and no answer came: an ambiguous failure), or `http_status` with `data` (a 200's `data` object) or `error` (the error body) and optional `headers`. `lookups` answers GET /trading/orders/by-client-id/{cid} (key `cid:<cid>`) and GET /trading/orders/{id} (key `order:<id>`), with the same item shapes; a lookup is sent at most once and is never retried. Rules: (1) the request body is built once, with every missing client_order_id generated before the first attempt, and every attempt sends the same body bytes (`expect.same_body`); each attempt is signed afresh. (2) An attempt is ambiguous when it ended in a network error after sending, in any HTTP 5xx except 501 and 503 (500, 502, 504, and Cloudflare's 520 and 524 included), or in a 200 the SDK cannot use: a body without `data`, an undecodable body, or results that do not match the request (a different count, or an item whose `index` or `client_order_id` is not the one sent at that position). A 429, 501, 503 or any other 4xx is a definite refusal: nothing was acted on. Which network errors count as 'after sending' is per language: an SDK that cannot tell a failed connect from a lost answer counts every network error as ambiguous (TypeScript, Rust); Python and Go count a failed connect as a refusal. (3) After the final 200, a place item's ALREADY_EXISTS, or a cancel entry's INVALID_STATE, is reinterpreted ONLY if an earlier attempt of this call was ambiguous; otherwise it is returned as the server sent it (the caller reused the id, or the order was closed before). (3b) On ANY attempt, a place item error OTHER than ALREADY_EXISTS that carries `details.order_id` (MARKET_UNAVAILABLE when the market stopped while matching, for example) means the order exists: it is `recovered` from details.order_id and details.status, with the rule (4) lookup when status is missing. A place item error with code INTERNAL and no `details.order_id` may follow a committed order: it gets the rule (4) lookup by client_order_id (found: `recovered`; not found or failed: `unknown`). (4) Place recovery: take order_id and status from the error's details; if either is missing, look the order up by client_order_id; if the lookup fails or answers 404, the item is `unknown`. Never place it again. (5) Cancel recovery: look the order up by order_id (or by client_order_id for a cid entry) and report its status; if the lookup fails, the item is `unknown`. (6) Outcomes: place `placed` (order set, no error), `failed` (error, not reinterpreted), `recovered` (status known), `unknown`; cancel `cancelled`, `failed`, `recovered`, `unknown`. Counts are recomputed from the outcomes, never copied from the server: place `placed` = placed + recovered whose status is not `rejected`; `failed` = failed + recovered `rejected`; cancel `cancelled` = cancelled + recovered whose status is `cancelled`; `failed` = failed + recovered with any other status; `unknown` counts the unknown items. (7) A 429 waits retry_after_seconds and is retried with the same body; details.limit `order_actions` holds only placements (place_order, place_orders) for that wait, not reads or cancels (`expect.hold`). (8) A whole-request 4xx other than 429 is raised at once and never retried; this includes the 400 whose details.limit is a number (the batch is larger than the key's whole budget; the SDK never splits it). (9) When place_orders raises after building its body (the request may have been sent), the error carries every client_order_id of the body, generated ones included, in request order, and `maybe_placed`: false only when every attempt was a definite refusal (rule 2); true after any ambiguous attempt, including the failing one, and for any failure that is not an HTTP answer (a network error, a cancelled call, a timeout, an unusable 200). Expected as `error: \"batch\"` with `cause` (the error code, `connection`, or `bad_response`), `maybe_placed`, and `error_cids: \"sent\"` (the cids in the first request body, in order). Local refusals (`validation`) raise before anything is built or sent and carry nothing. Every SDK exports its client_order_id generator so callers can create and save ids before the call. (10) A `.` or `..` client_order_id is refused locally: the server accepts it, but it cannot be used as a path segment to look the order up. `validation` cases are refused locally, before any request; `cid_path` cases give the encoded request path; `cost` gives the client limiter's request tokens and order actions per call. Every `order` object and every 200 lookup `data` is `order_template` overlaid with the fields given (wire names: the order id is `id`). Expected results name it `order_id`: for a placed or recovered-by-lookup item it is the order's `id`, for an item recovered from details it is details.order_id. `orders_count: N` means N limit buys with distinct generated client order ids. Attempt items may also be `{http_status, text}` (a body that is not JSON, sent as is) or `{http_status, body}` (the JSON body exactly as given, not wrapped in `data`). A cancel-batch entry by client_order_id `.` or `..` is also refused locally (rule 10). (11) A details.status of \"unknown\" counts as missing, so the rule (4) lookup runs. (12) A recovery lookup that fails in ANY way (an API or network error, a 200 that is not JSON or not an order, any other error) makes the item `unknown`; the call still returns its result. (13) cancel_orders raises `bad_response` (no ids needed) when the results do not match the entries sent: a different count, or an item whose `index`, `order_id` or `client_order_id` is not the one sent at that position. Note on rule (6): a recovered order is counted placed unless its status is `rejected`, even when it ended `cancelled` with nothing filled (MARKET_UNAVAILABLE after the market stopped): this errs toward not placing it again; read `status` before acting. Lookup items may also be `{http_status, text}`.",
  "order_template": {
   "symbol": "BTC/USDT",
   "side": "buy",
@@ -1794,6 +1794,133 @@
     "maybe_placed": false,
     "error_cids": "sent"
    }
+  },
+  {
+   "id": "details_status_unknown_is_looked_up",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 200,
+     "data": {
+      "placed": 0,
+      "failed": 1,
+      "results": [
+       {
+        "index": 0,
+        "client_order_id": "c1",
+        "order": null,
+        "fills": [],
+        "error": {
+         "code": "MARKET_UNAVAILABLE",
+         "message": "market_unavailable",
+         "retryable": false,
+         "details": {
+          "order_id": "o1",
+          "status": "unknown"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "lookups": {
+    "cid:c1": {
+     "http_status": 200,
+     "data": {
+      "id": "o1",
+      "status": "filled"
+     }
+    }
+   },
+   "expect": {
+    "calls": 1,
+    "same_body": true,
+    "lookups": [
+     "cid:c1"
+    ],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "recovered",
+      "order_id": "o1",
+      "status": "filled"
+     }
+    ],
+    "placed": 1,
+    "failed": 0,
+    "unknown": 0
+   }
+  },
+  {
+   "id": "lookup_answering_a_non_json_200_is_unknown",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 200,
+     "data": {
+      "placed": 0,
+      "failed": 1,
+      "results": [
+       {
+        "index": 0,
+        "client_order_id": "c1",
+        "order": null,
+        "fills": [],
+        "error": {
+         "code": "INTERNAL",
+         "message": "internal",
+         "retryable": false
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "lookups": {
+    "cid:c1": {
+     "http_status": 200,
+     "text": "<html>maintenance</html>"
+    }
+   },
+   "expect": {
+    "calls": 1,
+    "same_body": true,
+    "lookups": [
+     "cid:c1"
+    ],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "unknown"
+     }
+    ],
+    "placed": 0,
+    "failed": 0,
+    "unknown": 1
+   }
   }
  ],
  "cancel": [
@@ -2194,6 +2321,149 @@
     "cancelled": 1,
     "failed": 0,
     "unknown": 0
+   }
+  },
+  {
+   "id": "result_id_mismatch_raises",
+   "request": {
+    "orders": [
+     {
+      "order_id": "o1"
+     },
+     {
+      "order_id": "o2"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 200,
+     "data": {
+      "cancelled": 2,
+      "failed": 0,
+      "results": [
+       {
+        "index": 0,
+        "order_id": "o1",
+        "client_order_id": null,
+        "order": {
+         "id": "o1",
+         "status": "cancelled"
+        },
+        "error": null
+       },
+       {
+        "index": 1,
+        "order_id": "o9",
+        "client_order_id": null,
+        "order": {
+         "id": "o9",
+         "status": "cancelled"
+        },
+        "error": null
+       }
+      ]
+     }
+    }
+   ],
+   "expect": {
+    "calls": 1,
+    "error": "bad_response"
+   }
+  },
+  {
+   "id": "result_count_mismatch_raises",
+   "request": {
+    "orders": [
+     {
+      "order_id": "o1"
+     },
+     {
+      "client_order_id": "c2"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 200,
+     "data": {
+      "cancelled": 1,
+      "failed": 0,
+      "results": [
+       {
+        "index": 0,
+        "order_id": "o1",
+        "client_order_id": null,
+        "order": {
+         "id": "o1",
+         "status": "cancelled"
+        },
+        "error": null
+       }
+      ]
+     }
+    }
+   ],
+   "expect": {
+    "calls": 1,
+    "error": "bad_response"
+   }
+  },
+  {
+   "id": "lookup_answering_a_non_json_200_is_unknown",
+   "request": {
+    "orders": [
+     {
+      "client_order_id": "c1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "network_error": "timeout"
+    },
+    {
+     "http_status": 200,
+     "data": {
+      "cancelled": 0,
+      "failed": 1,
+      "results": [
+       {
+        "index": 0,
+        "order_id": null,
+        "client_order_id": "c1",
+        "order": null,
+        "error": {
+         "code": "INVALID_STATE",
+         "message": "This order is no longer open",
+         "retryable": false
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "lookups": {
+    "cid:c1": {
+     "http_status": 200,
+     "text": "<html>maintenance</html>"
+    }
+   },
+   "expect": {
+    "calls": 2,
+    "same_body": true,
+    "lookups": [
+     "cid:c1"
+    ],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "unknown"
+     }
+    ],
+    "cancelled": 0,
+    "failed": 0,
+    "unknown": 1
    }
   }
  ],

@@ -147,6 +147,8 @@ class Server:
             item = (self.case.get("lookups") or {})[key]
             if "network_error" in item:
                 raise httpx.ReadTimeout("lost lookup")
+            if "text" in item:
+                return httpx.Response(item["http_status"], text=item["text"])
             if item["http_status"] == 200:
                 return httpx.Response(200, json={"data": order(item["data"])})
             return reply(item)
@@ -246,12 +248,18 @@ def test_cancel_conformance(case: Dict[str, Any], mode: str) -> None:
             srv = Server(case, CANCEL_URL)
             fc = FakeClock()
             res: Any
-            if mode == "sync":
-                c = sync_client(fc)
-                res = c.trading.cancel_orders(case["request"]["orders"])
-            else:
-                c = async_client(fc)
-                res = await c.trading.cancel_orders(case["request"]["orders"])
+            try:
+                if mode == "sync":
+                    c = sync_client(fc)
+                    res = c.trading.cancel_orders(case["request"]["orders"])
+                else:
+                    c = async_client(fc)
+                    res = await c.trading.cancel_orders(case["request"]["orders"])
+            except cexy.CexyError as exc:
+                res = exc
+            if case["expect"].get("error") == "bad_response":
+                assert isinstance(res, cexy.BatchResponseError) and srv.batch.call_count == case["expect"]["calls"]
+                return
             check_common(case, srv, res, c._transport)
             check_results(case["expect"], res, "cancel")
 
@@ -516,3 +524,60 @@ def test_lookup_with_an_unusable_body_is_unknown() -> None:
         "BTC/USDT", [{"side": "buy", "type": "market", "quantity": "1", "client_order_id": "c1"}]
     )
     assert [o.outcome for o in res.results] == ["unknown"] and res.unknown == 1
+
+
+def _internal_item(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "data": {
+                "placed": 0,
+                "failed": 1,
+                "results": [
+                    {
+                        "index": 0,
+                        "client_order_id": "c1",
+                        "order": None,
+                        "fills": [],
+                        "error": {"code": "INTERNAL", "message": "x", "retryable": False},
+                    }
+                ],
+            }
+        },
+    )
+
+
+@respx.mock
+def test_interrupt_during_lookups_carries_the_ids() -> None:
+    respx.post(PLACE_URL).mock(side_effect=_internal_item)
+    c = sync_client(FakeClock())
+
+    def interrupted(outcome: Any) -> Any:
+        raise KeyboardInterrupt
+
+    c.trading._recover_placed = interrupted  # type: ignore[method-assign]
+    with pytest.raises(KeyboardInterrupt) as info:
+        c.trading.place_orders(
+            "BTC/USDT", [{"side": "buy", "type": "market", "quantity": "1", "client_order_id": "c1"}]
+        )
+    assert info.value.client_order_ids == ["c1"]  # type: ignore[attr-defined]
+    assert info.value.maybe_placed is True  # type: ignore[attr-defined]
+
+
+@respx.mock
+def test_a_200_that_is_not_utf8_is_a_batch_response_error() -> None:
+    respx.post(PLACE_URL).respond(200, content=b'{"data": "\xff\xfe"}', headers={"Content-Type": "application/json"})
+    with pytest.raises(cexy.BatchResponseError) as info:
+        sync_client(FakeClock()).trading.place_orders(
+            "BTC/USDT", [{"side": "buy", "type": "market", "quantity": "1", "client_order_id": "c1"}]
+        )
+    assert info.value.maybe_placed is True  # type: ignore[attr-defined]
+
+
+def test_configuration_error_after_an_ambiguous_attempt_is_maybe_placed() -> None:
+    from cexy._batch import attach_client_order_ids
+
+    early, late = cexy.ConfigurationError("x"), cexy.ConfigurationError("y")
+    attach_client_order_ids(early, ["c1"], [])
+    attach_client_order_ids(late, ["c1"], ["ambiguous"])
+    assert early.maybe_placed is False and late.maybe_placed is True  # type: ignore[attr-defined]

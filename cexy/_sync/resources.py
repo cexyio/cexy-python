@@ -9,7 +9,6 @@ Every public method maps to exactly one allowlisted API operation (``@operation`
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from typing import Any, Iterator, List, Literal, Mapping, Optional, Sequence, Union, overload
 
@@ -41,6 +40,7 @@ from cexy._sync.transport import SyncTransport
 from cexy.errors import (
     CexyApiError,
     CexyConnectionError,
+    ConfigurationError,
     NotFoundError,
     PagingCursorRepeatedError,
     PagingStalledError,
@@ -601,7 +601,9 @@ class Trading(_Resource):
                     order_actions=len(items),
                     attempts=attempts,
                 )
-            except json.JSONDecodeError as exc:
+            except ValueError as exc:  # JSONDecodeError, or a body that is not UTF-8
+                if isinstance(exc, ConfigurationError):
+                    raise
                 raise BatchResponseError("place_orders: an undecodable 200") from exc
             data = check_results(cids, payload)
         except BaseException as exc:
@@ -610,11 +612,15 @@ class Trading(_Resource):
             raise
         after_ambiguous = "ambiguous" in attempts
         results: List[BatchOrderOutcome] = []
-        for r in data.results:
-            outcome = place_from_result(r, after_ambiguous)
-            if needs_lookup(outcome):
-                outcome = self._recover_placed(outcome)
-            results.append(outcome)
+        try:
+            for r in data.results:
+                outcome = place_from_result(r, after_ambiguous)
+                if needs_lookup(outcome):
+                    outcome = self._recover_placed(outcome)
+                results.append(outcome)
+        except BaseException as exc:  # a cancel or Ctrl-C during the lookups: the orders were sent
+            attach_client_order_ids(exc, cids, ["ambiguous"])
+            raise
         return place_result(results)
 
     def _recover_placed(self, o: BatchOrderOutcome) -> BatchOrderOutcome:
@@ -643,9 +649,11 @@ class Trading(_Resource):
         attempts: List[str] = []
         try:
             payload = self._t.request("cancel_batch", body={"orders": entries}, cost=len(entries), attempts=attempts)
-        except json.JSONDecodeError as exc:
+        except ValueError as exc:  # JSONDecodeError, or a body that is not UTF-8
+            if isinstance(exc, ConfigurationError):
+                raise
             raise BatchResponseError("cancel_orders: an undecodable 200") from exc
-        data = check_cancel_results(len(entries), payload)
+        data = check_cancel_results(entries, payload)
         after_ambiguous = "ambiguous" in attempts
         results: List[CancelEntryOutcome] = []
         for r in data.results:

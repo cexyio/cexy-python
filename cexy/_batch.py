@@ -159,6 +159,8 @@ def _status(value: Any) -> Optional[str]:
 def _detail(err: m.ErrorBody, name: str) -> Optional[str]:
     v = (err.details or {}).get(name)
     raw = getattr(v, "root", v)
+    if name == "status" and raw == "unknown":
+        return None  # the server could not say: look it up
     return raw if isinstance(raw, str) and raw else None
 
 
@@ -204,14 +206,17 @@ def check_results(sent_cids: Sequence[str], data: Any) -> Any:
     return parsed
 
 
-def check_cancel_results(sent: int, data: Any) -> Any:
+def check_cancel_results(sent: Sequence[Mapping[str, Any]], data: Any) -> Any:
     if not isinstance(data, Mapping) or "data" not in data:
         raise BatchResponseError("cancel_orders: a 200 without data")
     try:
         parsed = m.CancelBatchResponse.model_validate(data["data"])
     except Exception as exc:
         raise BatchResponseError(f"cancel_orders: an undecodable 200 ({type(exc).__name__})") from exc
-    if len(parsed.results) != sent or any(r.index != i for i, r in enumerate(parsed.results)):
+    if len(parsed.results) != len(sent) or any(
+        r.index != i or r.order_id != e.get("order_id") or r.client_order_id != e.get("client_order_id")
+        for i, (r, e) in enumerate(zip(parsed.results, sent))
+    ):
         raise BatchResponseError("cancel_orders: the results do not match the entries sent")
     return parsed
 
@@ -234,9 +239,7 @@ def attach_client_order_ids(exc: BaseException, cids: Sequence[str], attempts: S
     order, and ``maybe_placed``: False only when every attempt was a definite refusal (or nothing
     was sent); True after any ambiguous attempt and for any failure that is not an HTTP answer
     (a network error after sending, a cancelled task, an unusable 200)."""
-    if isinstance(exc, (MissingCredentialsError, ConfigurationError)):
-        maybe = False
-    elif isinstance(exc, (CexyApiError, CexyConnectionError)):
+    if isinstance(exc, (MissingCredentialsError, ConfigurationError, CexyApiError, CexyConnectionError)):
         maybe = "ambiguous" in attempts
     else:
         maybe = True
