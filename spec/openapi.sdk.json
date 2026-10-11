@@ -2425,7 +2425,7 @@
           "trading"
         ],
         "summary": "Places an order.",
-        "description": "Funds are reserved before the order reaches the book, so a matched order can never be unfunded. On a buy the reservation covers the value plus the **taker** fee, which is the worst case \u2014 a maker fill releases the difference.\n\nA market buy by `quote_quantity` (a budget) reserves exactly the budget, and the budget includes the taker fee: `filled_quote_quantity + fee_paid <= quote_quantity`. It needs `quote_quantity >= min_notional` and no more decimals than the market's prices (`PRECISION_EXCEEDED`). Its `quantity` and `remaining_quantity` are `0`. It ends `filled` when what is left cannot buy one lot at the last fill price, otherwise `cancelled` with `Insufficient liquidity to fill the remainder` (or `Budget exhausted` with no fill).\n\nSet `client_order_id` to make a retry safe: it is unique per account, so a repeat is refused before any funds move, and `GET /trading/orders/by-client-id/{client_order_id}` recovers the outcome. A retry with a `client_order_id` already used always gets 409 `ALREADY_EXISTS` with the existing order's `order_id` and `status` in `details`, even if the market has since paused or the retry's body differs: the id identifies the intent. `Idempotency-Key` is not honoured here.",
+        "description": "Funds are reserved before the order reaches the book, so a matched order can never be unfunded. On a buy the reservation covers the value plus the **taker** fee, which is the worst case \u2014 a maker fill releases the difference.\n\nA market buy by `quote_quantity` (a budget) reserves exactly the budget, and the budget includes the taker fee: `filled_quote_quantity + fee_paid <= quote_quantity`. It needs `quote_quantity >= min_notional` and no more decimals than the market's prices (`PRECISION_EXCEEDED`). Its `quantity` and `remaining_quantity` are `0`. It ends `filled` when what is left cannot buy one lot at the last fill price, otherwise `cancelled` with `Insufficient liquidity to fill the remainder` (or `Budget exhausted` with no fill).\n\nSet `client_order_id` to make a retry safe: it is unique per account, so a repeat is refused before any funds move, and `GET /trading/orders/by-client-id/{client_order_id}` recovers the outcome. A retry with a `client_order_id` already used always gets 409 `ALREADY_EXISTS` with the existing order's `order_id` and `status` in `details`, even if the market has since paused or the retry's body differs: the id identifies the intent. `Idempotency-Key` is not honoured here.\n\nA key in the market-maker rate tier spends one order action of its per-second budget (429 `RATE_LIMITED` with `details.limit` `order_actions` when it is spent).",
         "operationId": "place_order",
         "requestBody": {
           "content": {
@@ -2486,8 +2486,107 @@
               }
             }
           },
+          "429": {
+            "description": "Over the request limit, or over a market-maker key's order budget (`details.limit` `order_actions`); `details.retry_after_seconds` says when to retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "503": {
             "description": "The market is saturated; retry shortly",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
+          }
+        ],
+        "x-required-scope": "trade"
+      }
+    },
+    "/api/v1/trading/orders/batch": {
+      "post": {
+        "tags": [
+          "trading"
+        ],
+        "summary": "Places up to 20 orders in one market, each on its own.",
+        "description": "Each order goes through exactly what `POST /trading/orders` does, in its own transaction, one after another in the order sent: the batch is not atomic. The response has one result per order, in the order sent: the order (with its fills), or the error a single placement would have answered. The response is 200 whenever the batch was processed, even if every order was refused.\n\nEvery order needs its own `client_order_id`, so a retry of a batch whose response was lost places nothing twice: each order already placed is answered `ALREADY_EXISTS` with its `order_id` and `status` in `details`, and `GET /trading/orders/by-client-id/{id}` recovers it. `Idempotency-Key` is not honoured here.\n\nRefused as a whole, before anything is placed, when it has no orders or more than 20, a `client_order_id` is missing, malformed or repeated within the batch (400), the market does not exist (404), the account may not trade (403), or the batch does not fit the caller's order budget (429). Each order counts as one order action: against a market-maker key's per-second budget, or as one request each against the default limit.",
+        "operationId": "place_batch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchOrderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Each order's outcome, in the order sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/BatchOrderResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No orders or more than 20, or a client_order_id missing, malformed or used twice in the batch; nothing was placed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account may not trade",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such market",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The batch does not fit the order budget or the request limit (`details.retry_after_seconds`); nothing was placed",
             "content": {
               "application/json": {
                 "schema": {
@@ -2565,6 +2664,94 @@
           }
         ],
         "x-required-scope": "read"
+      },
+      "delete": {
+        "tags": [
+          "trading"
+        ],
+        "summary": "Cancels an order named by the id the client supplied.",
+        "description": "Exactly as `DELETE /trading/orders/{order_id}` for the order that `client_order_id` names on this account. A cancel spends none of a market-maker key's order budget.",
+        "operationId": "cancel_order_by_client_id",
+        "parameters": [
+          {
+            "name": "client_order_id",
+            "in": "path",
+            "description": "Your identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cancelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/OrderResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed client order id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such order on this account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The order is no longer open",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Over the request limit; `details.retry_after_seconds` says when to retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
+          }
+        ],
+        "x-required-scope": "trade"
       }
     },
     "/api/v1/trading/orders/cancel-all": {
@@ -2573,7 +2760,7 @@
           "trading"
         ],
         "summary": "Cancels every open order and untriggered stop, optionally in one market.",
-        "description": "Every open order, and every stop order that has not triggered, is cancelled; with `symbol`, only that market's.\n\nBest-effort: a failure on one order does not stop the rest, and every outcome is reported. A panic-button endpoint that stops at the first problem is worse than useless. A stop waiting for its trigger (`pending_trigger`) is cancelled too and its reservation released, so nothing fires into the market after the call.\n\nAn order still being placed when the call starts (status `pending`, for as long as its own placement request runs) is waited for, up to 500 ms per call in total: cancelled if it opens, reported in `already_closed` if it fills or is refused, and in `failed` with code `INVALID_STATE` if it is still being placed at the deadline. Orders placed after the call starts are not part of it. At most 500 orders per call; `has_more` says there are others.\n\nLimited to 30 calls a minute per account, on top of the general request limit.",
+        "description": "Every open order, and every stop order that has not triggered, is cancelled; with `symbol`, only that market's.\n\nBest-effort: a failure on one order does not stop the rest, and every outcome is reported. A panic-button endpoint that stops at the first problem is worse than useless. A stop waiting for its trigger (`pending_trigger`) is cancelled too and its reservation released, so nothing fires into the market after the call.\n\nAn order still being placed when the call starts (status `pending`, for as long as its own placement request runs) is waited for, up to 500 ms per call in total: cancelled if it opens, reported in `already_closed` if it fills or is refused, and in `failed` with code `INVALID_STATE` if it is still being placed at the deadline. Orders placed after the call starts are not part of it. At most 500 orders per call; `has_more` says there are others.\n\nLimited to 30 calls a minute per account (120 from a key in the market-maker rate tier), on top of the general request limit.",
         "operationId": "cancel_all",
         "requestBody": {
           "content": {
@@ -2615,7 +2802,7 @@
             }
           },
           "429": {
-            "description": "Over 30 calls a minute for this account; `details.retry_after_seconds` says when to retry",
+            "description": "Over 30 calls a minute for this account (120 from a market-maker key); `details.retry_after_seconds` says when to retry",
             "content": {
               "application/json": {
                 "schema": {
@@ -2695,6 +2882,75 @@
           },
           "404": {
             "description": "No such market",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": [],
+            "api_nonce": [],
+            "api_signature": [],
+            "api_timestamp": []
+          }
+        ],
+        "x-required-scope": "trade"
+      }
+    },
+    "/api/v1/trading/orders/cancel-batch": {
+      "post": {
+        "tags": [
+          "trading"
+        ],
+        "summary": "Cancels up to 50 orders, each named by its order id or by your client order id.",
+        "description": "Each entry is cancelled as by `DELETE /trading/orders/{order_id}` or `DELETE /trading/orders/by-client-id/{client_order_id}`, one after another in the order sent; a failure does not stop the rest. The response has one result per entry, in the order sent: the cancelled order, or the error its own cancel would have answered.\n\nRefused as a whole, before anything is cancelled, when it has no entries or more than 50, an entry names neither or both ids, or an id is malformed (400), or (default tier) the batch does not fit the caller's request limit (429): there each entry costs one request. A market-maker key's cancels spend none of its order budget.",
+        "operationId": "cancel_batch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Each entry's outcome, in the order sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/CancelBatchResponse"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No entries or more than 50, or an entry without exactly one well-formed id; nothing was cancelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The batch does not fit the request limit (`details.retry_after_seconds`); nothing was cancelled. A market-maker key's cancels are not charged to its order budget",
             "content": {
               "application/json": {
                 "schema": {
@@ -2893,6 +3149,7 @@
           "trading"
         ],
         "summary": "Cancels an order, releasing only what is still reserved.",
+        "description": "A cancel spends none of a market-maker key's order budget: only its request limit.",
         "operationId": "cancel_order",
         "parameters": [
           {
@@ -2936,6 +3193,16 @@
           },
           "409": {
             "description": "The order is no longer open",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Over the request limit; `details.retry_after_seconds` says when to retry",
             "content": {
               "application/json": {
                 "schema": {
@@ -3532,7 +3799,8 @@
           "scopes",
           "allowed_ips",
           "revoked",
-          "created_at"
+          "created_at",
+          "rate_tier"
         ],
         "properties": {
           "allowed_ips": {
@@ -3570,6 +3838,11 @@
             "format": "date-time",
             "description": "When it was last used, if ever.",
             "nullable": true
+          },
+          "rate_tier": {
+            "type": "string",
+            "description": "Its rate-limit tier: `default`, or `mm` for a market maker's key, which only the exchange sets.",
+            "example": "default"
           },
           "revoked": {
             "type": "boolean",
@@ -3829,6 +4102,169 @@
           }
         }
       },
+      "BatchOrderItem": {
+        "type": "object",
+        "description": "One order of a batch: an order as for `POST /trading/orders`, without the symbol, and with `client_order_id` required.",
+        "required": [
+          "side",
+          "type",
+          "client_order_id"
+        ],
+        "properties": {
+          "client_order_id": {
+            "type": "string",
+            "description": "Your own identifier, unique per account. Required: a retry of the batch is answered `ALREADY_EXISTS` for every order it already placed, so nothing is placed twice.",
+            "example": "q-1717171717-001"
+          },
+          "price": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Amount"
+              }
+            ],
+            "nullable": true
+          },
+          "quantity": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Amount"
+              }
+            ],
+            "nullable": true
+          },
+          "quote_quantity": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Amount"
+              }
+            ],
+            "nullable": true
+          },
+          "side": {
+            "$ref": "#/components/schemas/OrderSide"
+          },
+          "stop_price": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Amount"
+              }
+            ],
+            "nullable": true
+          },
+          "time_in_force": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TimeInForce"
+              }
+            ],
+            "nullable": true
+          },
+          "trigger_direction": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TriggerDirection"
+              }
+            ],
+            "nullable": true
+          },
+          "type": {
+            "$ref": "#/components/schemas/OrderType"
+          }
+        }
+      },
+      "BatchOrderRequest": {
+        "type": "object",
+        "description": "Places up to 20 orders in one market (Phase 0 B2).",
+        "required": [
+          "symbol",
+          "orders"
+        ],
+        "properties": {
+          "orders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BatchOrderItem"
+            },
+            "description": "The orders, 1 to 20, placed one after another in this order."
+          },
+          "symbol": {
+            "type": "string",
+            "description": "The market every order is placed in.",
+            "example": "BTC/USDT"
+          }
+        }
+      },
+      "BatchOrderResponse": {
+        "type": "object",
+        "description": "What a batch did: one result per order, in the order sent.",
+        "required": [
+          "results",
+          "placed",
+          "failed"
+        ],
+        "properties": {
+          "failed": {
+            "type": "integer",
+            "description": "How many were refused.",
+            "minimum": 0
+          },
+          "placed": {
+            "type": "integer",
+            "description": "How many were accepted.",
+            "minimum": 0
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BatchOrderResult"
+            },
+            "description": "One per order sent, in the same order."
+          }
+        }
+      },
+      "BatchOrderResult": {
+        "type": "object",
+        "description": "One order's outcome in a batch: exactly one of `order` and `error` is set.",
+        "required": [
+          "index",
+          "client_order_id",
+          "fills"
+        ],
+        "properties": {
+          "client_order_id": {
+            "type": "string",
+            "description": "Its `client_order_id`, as sent."
+          },
+          "error": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              }
+            ],
+            "nullable": true
+          },
+          "fills": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FillResponse"
+            },
+            "description": "Fills produced on entry, oldest first; empty when refused."
+          },
+          "index": {
+            "type": "integer",
+            "description": "Its position in the request, from 0.",
+            "minimum": 0
+          },
+          "order": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OrderResponse"
+              }
+            ],
+            "nullable": true
+          }
+        }
+      },
       "CancelAllAfterRequest": {
         "type": "object",
         "description": "Arms, re-arms or disarms the dead-man switch.",
@@ -3942,6 +4378,106 @@
           "has_more": {
             "type": "boolean",
             "description": "More open orders exist than one call handles (500). Call again."
+          }
+        }
+      },
+      "CancelBatchItem": {
+        "type": "object",
+        "description": "One order to cancel: exactly one of `order_id` and `client_order_id`.",
+        "properties": {
+          "client_order_id": {
+            "type": "string",
+            "description": "Your identifier for it.",
+            "nullable": true
+          },
+          "order_id": {
+            "type": "string",
+            "description": "The order's id.",
+            "nullable": true
+          }
+        }
+      },
+      "CancelBatchRequest": {
+        "type": "object",
+        "description": "Cancels up to 50 orders, each named by its id or by your own (Phase 0 B2).",
+        "required": [
+          "orders"
+        ],
+        "properties": {
+          "orders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CancelBatchItem"
+            },
+            "description": "The orders, 1 to 50, cancelled one after another in this order."
+          }
+        }
+      },
+      "CancelBatchResponse": {
+        "type": "object",
+        "description": "What a batch cancel did: one result per entry, in the order sent.",
+        "required": [
+          "results",
+          "cancelled",
+          "failed"
+        ],
+        "properties": {
+          "cancelled": {
+            "type": "integer",
+            "description": "How many were cancelled.",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "description": "How many were not.",
+            "minimum": 0
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CancelBatchResult"
+            },
+            "description": "One per entry sent, in the same order."
+          }
+        }
+      },
+      "CancelBatchResult": {
+        "type": "object",
+        "description": "One entry's outcome in a batch cancel: exactly one of `order` and `error` is set.",
+        "required": [
+          "index"
+        ],
+        "properties": {
+          "client_order_id": {
+            "type": "string",
+            "description": "The client order id, as sent.",
+            "nullable": true
+          },
+          "error": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              }
+            ],
+            "nullable": true
+          },
+          "index": {
+            "type": "integer",
+            "description": "Its position in the request, from 0.",
+            "minimum": 0
+          },
+          "order": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OrderResponse"
+              }
+            ],
+            "nullable": true
+          },
+          "order_id": {
+            "type": "string",
+            "description": "The order id, as sent.",
+            "nullable": true
           }
         }
       },

@@ -47,14 +47,15 @@ class TokenBucket:
         self.tokens = min(self.capacity, self.tokens + max(0.0, now - self._last) * self.rate)
         self._last = now
 
-    def acquire(self) -> float:
-        """Take one token. Returns how long the caller must sleep first (0 if none)."""
+    def acquire(self, cost: float = 1.0) -> float:
+        """Take ``cost`` tokens (a batch of N takes N). Returns how long the caller must sleep
+        first (0 if none)."""
         with self._lock:
             now = self._clock()
             self._refill(now)
             held = max(0.0, self._blocked_until - now)
             wait = held
-            self.tokens -= 1.0
+            self.tokens -= cost
             if self.tokens < 0:
                 wait = max(wait, -self.tokens / self.rate)
             if held > 0:

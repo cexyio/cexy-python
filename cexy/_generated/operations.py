@@ -135,6 +135,17 @@ OPERATIONS = {
         "list_open_orders", "GET", "/api/v1/trading/orders", "api_key", "read", (), ("symbol", "status"), False
     ),
     "place_order": Operation("place_order", "POST", "/api/v1/trading/orders", "api_key", "trade", (), (), False),
+    "place_batch": Operation("place_batch", "POST", "/api/v1/trading/orders/batch", "api_key", "trade", (), (), False),
+    "cancel_order_by_client_id": Operation(
+        "cancel_order_by_client_id",
+        "DELETE",
+        "/api/v1/trading/orders/by-client-id/{client_order_id}",
+        "api_key",
+        "trade",
+        ("client_order_id",),
+        (),
+        False,
+    ),
     "get_order_by_client_id": Operation(
         "get_order_by_client_id",
         "GET",
@@ -150,6 +161,9 @@ OPERATIONS = {
     ),
     "cancel_all_after": Operation(
         "cancel_all_after", "POST", "/api/v1/trading/orders/cancel-all-after", "api_key", "trade", (), (), False
+    ),
+    "cancel_batch": Operation(
+        "cancel_batch", "POST", "/api/v1/trading/orders/cancel-batch", "api_key", "trade", (), (), False
     ),
     "order_history": Operation(
         "order_history",
