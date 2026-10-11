@@ -9,10 +9,27 @@ Every public method maps to exactly one allowlisted API operation (``@operation`
 
 from __future__ import annotations
 
-import uuid
 from datetime import datetime
-from typing import Any, Iterator, List, Literal, Optional, Union, overload
+from typing import Any, Iterator, List, Literal, Mapping, Optional, Sequence, Union, overload
 
+from cexy._batch import (
+    BatchCancelResult,
+    BatchOrderOutcome,
+    BatchPlaceResult,
+    BatchResponseError,
+    CancelEntryOutcome,
+    attach_client_order_ids,
+    cancel_from_result,
+    cancel_result,
+    check_cancel,
+    check_cancel_results,
+    check_place,
+    check_results,
+    needs_lookup,
+    new_client_order_id,
+    place_from_result,
+    place_result,
+)
 from cexy._cancel_all import CancelAllResult, _Merge, made_progress, next_backoff, should_continue
 from cexy._common import AUTO
 from cexy._decimal import DecimalLike, to_wire, to_wire_opt
@@ -23,6 +40,7 @@ from cexy._sync.transport import SyncTransport
 from cexy.errors import (
     CexyApiError,
     CexyConnectionError,
+    ConfigurationError,
     NotFoundError,
     PagingCursorRepeatedError,
     PagingStalledError,
@@ -455,8 +473,11 @@ class Trading(_Resource):
         order is returned (``fills`` is then empty: query ``trading.trades`` for them),
         otherwise the order is resent with the same ``client_order_id``. If a retry is
         refused as ``ALREADY_EXISTS``, the existing order is fetched and returned.
+
+        An error raised after the request may have been sent carries ``client_order_ids`` (the
+        one id) and ``maybe_placed``, as ``place_orders`` does.
         """
-        cid = client_order_id or str(uuid.uuid4())
+        cid = client_order_id or new_client_order_id()
         body = {
             "symbol": symbol,
             "side": _enum_value(side),
@@ -481,7 +502,19 @@ class Trading(_Resource):
             # The duplicate client_order_id means an earlier attempt placed the order.
             return recover() if err.code == "ALREADY_EXISTS" else None
 
-        payload = self._t.request("place_order", body=body, recover=recover, on_retry_error=on_retry_error)
+        attempts: List[str] = []
+        try:
+            payload = self._t.request(
+                "place_order",
+                body=body,
+                recover=recover,
+                on_retry_error=on_retry_error,
+                order_actions=1,
+                attempts=attempts,
+            )
+        except BaseException as exc:
+            attach_client_order_ids(exc, [cid], attempts)
+            raise
         return m.PlaceOrderResponse.model_validate(_data(payload))
 
     @operation("cancel_order")
@@ -503,6 +536,146 @@ class Trading(_Resource):
 
         payload = self._t.request("cancel_order", path={"order_id": order_id}, on_retry_error=on_retry_error)
         return m.OrderResponse.model_validate(_data(payload))
+
+    @operation("cancel_order_by_client_id")
+    def cancel_order_by_client_id(self, client_order_id: str) -> m.OrderResponse:
+        """Cancel one order named by your ``client_order_id`` and return its state.
+
+        Retried like ``cancel_order``: if a *retry* is refused with ``INVALID_STATE``, the SDK
+        fetches and returns the order's current state instead of raising. Check ``status``.
+        """
+
+        def on_retry_error(err: CexyApiError) -> Optional[Any]:
+            if err.code != "INVALID_STATE":
+                return None
+            current = self.order_by_client_id(client_order_id)
+            return {"data": current.model_dump(mode="json")}
+
+        payload = self._t.request(
+            "cancel_order_by_client_id", path={"client_order_id": client_order_id}, on_retry_error=on_retry_error
+        )
+        return m.OrderResponse.model_validate(_data(payload))
+
+    @operation("place_batch")
+    def place_orders(self, symbol: str, orders: Sequence[Mapping[str, Any]]) -> BatchPlaceResult:
+        """Place 1 to 20 REAL orders in one market, each on its own (not atomic).
+
+        Each order is a mapping with the keyword arguments of ``place_order`` except ``symbol``:
+        ``side``, ``type`` and the optional ``quantity``, ``price``, ``quote_quantity``,
+        ``stop_price``, ``time_in_force``, ``trigger_direction`` and ``client_order_id``. A
+        ``client_order_id`` (a UUID) is generated for each order without one; caller ids must be
+        1 to 64 characters of ``A-Z a-z 0-9 _ - . :`` and distinct.
+
+        Retry safety: the body, ids included, is built once and every retry resends it unchanged.
+        The server refuses a repeated id, so nothing is placed twice. After a lost answer, an order
+        that the earlier attempt placed comes back as ``outcome="recovered"`` with its
+        ``order_id`` and ``status`` (``rejected`` means refused for funds; its id is spent). A
+        refusal of the whole batch (400, 403, 404) is raised and never retried; a batch larger
+        than the key's whole budget (400 with a number in ``details["limit"]``) must be split by
+        the caller. A 429 is waited out and the same body resent. Results are in request order;
+        the counts are computed from them.
+        """
+        check_place(orders)
+        items = []
+        for o in orders:
+            item = {
+                "side": _enum_value(o["side"]),
+                "type": _enum_value(o["type"]),
+                "quantity": to_wire_opt(o.get("quantity"), "quantity"),
+                "price": to_wire_opt(o.get("price"), "price"),
+                "quote_quantity": to_wire_opt(o.get("quote_quantity"), "quote_quantity"),
+                "stop_price": to_wire_opt(o.get("stop_price"), "stop_price"),
+                "time_in_force": _enum_value(o.get("time_in_force")),
+                "trigger_direction": _enum_value(o.get("trigger_direction")),
+                "client_order_id": o.get("client_order_id") or new_client_order_id(),
+            }
+            items.append({k: v for k, v in item.items() if v is not None})
+        cids = [item["client_order_id"] for item in items]
+        attempts: List[str] = []
+        try:
+            try:
+                payload = self._t.request(
+                    "place_batch",
+                    body={"symbol": symbol, "orders": items},
+                    cost=len(items),
+                    order_actions=len(items),
+                    attempts=attempts,
+                )
+            except ValueError as exc:  # JSONDecodeError, or a body that is not UTF-8
+                if isinstance(exc, ConfigurationError):
+                    raise
+                raise BatchResponseError("place_orders: an undecodable 200") from exc
+            data = check_results(cids, payload)
+        except BaseException as exc:
+            # The orders may be live: the caller needs every id to reconcile (cancelled tasks too).
+            attach_client_order_ids(exc, cids, attempts)
+            raise
+        after_ambiguous = "ambiguous" in attempts
+        results: List[BatchOrderOutcome] = []
+        try:
+            for r in data.results:
+                outcome = place_from_result(r, after_ambiguous)
+                if needs_lookup(outcome):
+                    outcome = self._recover_placed(outcome)
+                results.append(outcome)
+        except BaseException as exc:  # a cancel or Ctrl-C during the lookups: the orders were sent
+            attach_client_order_ids(exc, cids, ["ambiguous"])
+            raise
+        return place_result(results)
+
+    def _recover_placed(self, o: BatchOrderOutcome) -> BatchOrderOutcome:
+        # The server could not say what took this id: read it once, and never place it again.
+        try:
+            payload = self._t.request(
+                "get_order_by_client_id", path={"client_order_id": o.client_order_id}, max_retries=0
+            )
+            order = m.OrderResponse.model_validate(_data(payload))
+        except Exception:  # any failure to read it, a bad body included: unknown, never re-placed
+            return BatchOrderOutcome(o.index, o.client_order_id, "unknown", error=o.error)
+        status = _enum_value(order.status)
+        return BatchOrderOutcome(o.index, o.client_order_id, "recovered", order.id, status, order, error=o.error)
+
+    @operation("cancel_batch")
+    def cancel_orders(self, orders: Sequence[Mapping[str, str]]) -> BatchCancelResult:
+        """Cancel 1 to 50 orders, each ``{"order_id": ...}`` or ``{"client_order_id": ...}``.
+
+        Each entry is cancelled on its own, in order; a failure does not stop the rest. Retried
+        like ``cancel_order``: after a lost answer, an entry refused with ``INVALID_STATE`` (an
+        earlier attempt may have cancelled it) is looked up and comes back as
+        ``outcome="recovered"`` with its current ``status``. Results are in request order; the
+        counts are computed from them.
+        """
+        entries = check_cancel(orders)
+        attempts: List[str] = []
+        try:
+            payload = self._t.request("cancel_batch", body={"orders": entries}, cost=len(entries), attempts=attempts)
+        except ValueError as exc:  # JSONDecodeError, or a body that is not UTF-8
+            if isinstance(exc, ConfigurationError):
+                raise
+            raise BatchResponseError("cancel_orders: an undecodable 200") from exc
+        data = check_cancel_results(entries, payload)
+        after_ambiguous = "ambiguous" in attempts
+        results: List[CancelEntryOutcome] = []
+        for r in data.results:
+            outcome = cancel_from_result(r, after_ambiguous)
+            if outcome.outcome == "recovered":
+                outcome = self._recover_cancelled(outcome)
+            results.append(outcome)
+        return cancel_result(results)
+
+    def _recover_cancelled(self, o: CancelEntryOutcome) -> CancelEntryOutcome:
+        try:
+            if o.order_id:
+                payload = self._t.request("get_order", path={"order_id": o.order_id}, max_retries=0)
+            else:
+                payload = self._t.request(
+                    "get_order_by_client_id", path={"client_order_id": o.client_order_id or ""}, max_retries=0
+                )
+            order = m.OrderResponse.model_validate(_data(payload))
+        except Exception:  # any failure to read it, a bad body included
+            return CancelEntryOutcome(o.index, "unknown", o.order_id, o.client_order_id, error=o.error)
+        status = _enum_value(order.status)
+        return CancelEntryOutcome(o.index, "recovered", order.id, o.client_order_id, status, order, o.error)
 
     @overload
     def cancel_all(self, *, symbol: Optional[str], until_done: Literal[False] = ...) -> m.CancelAllResponse: ...

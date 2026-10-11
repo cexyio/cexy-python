@@ -9,6 +9,14 @@ Private endpoints need an API key pair: ``cexy.Client(api_key=..., api_secret=..
 
 from cexy._async.client import AsyncClient
 from cexy._async.pagination import AsyncPage
+from cexy._batch import (
+    BatchCancelResult,
+    BatchOrderOutcome,
+    BatchPlaceResult,
+    BatchResponseError,
+    CancelEntryOutcome,
+    new_client_order_id,
+)
 from cexy._cancel_all import CancelAllResult
 from cexy._common import DEFAULT_BASE_URL, USER_AGENT
 from cexy._sync.client import Client
@@ -42,7 +50,12 @@ __all__ = [
     "AsyncPage",
     "AuthenticationError",
     "Authenticator",
+    "BatchCancelResult",
+    "BatchOrderOutcome",
+    "BatchPlaceResult",
+    "BatchResponseError",
     "CancelAllResult",
+    "CancelEntryOutcome",
     "CexyApiError",
     "CexyConnectionError",
     "CexyError",
@@ -63,4 +76,5 @@ __all__ = [
     "UnprocessableError",
     "ValidationError",
     "__version__",
+    "new_client_order_id",
 ]

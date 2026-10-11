@@ -1,4 +1,4 @@
-"""The facade exposes exactly the 52 allowlisted operations in spec/openapi.sdk.json."""
+"""The facade exposes exactly the 55 allowlisted operations in spec/openapi.sdk.json."""
 
 from __future__ import annotations
 
@@ -35,8 +35,8 @@ def facade_methods(client: Any) -> Dict[str, Any]:
     return found
 
 
-def test_spec_has_52_operations() -> None:
-    assert len(SPEC_OPS) == 52
+def test_spec_has_55_operations() -> None:
+    assert len(SPEC_OPS) == 55
 
 
 @pytest.mark.parametrize("cls", [cexy.Client, cexy.AsyncClient])
@@ -95,6 +95,13 @@ def _path_regex(path: str) -> str:
     return "^" + BASE + re.sub(r"\{[^}]+\}", "[^/]+", path) + r"(\?.*)?$"
 
 
+# Arguments whose shape depends on the operation.
+OP_ARGS: Dict[str, Dict[str, Any]] = {
+    "place_batch": {"orders": [{"side": "buy", "type": "limit", "price": "1", "quantity": "1"}]},
+    "cancel_batch": {"orders": [{"order_id": "o1"}]},
+}
+
+
 @pytest.mark.parametrize("op_id", sorted(SPEC_OPS))
 def test_each_method_calls_its_operation(op_id: str) -> None:
     client = cexy.Client(api_key=KEY, api_secret=SECRET, max_retries=0)
@@ -103,7 +110,7 @@ def test_each_method_calls_its_operation(op_id: str) -> None:
     kwargs = {}
     for name, p in inspect.signature(fn).parameters.items():
         if p.default is inspect.Parameter.empty:
-            kwargs[name] = ARGS[name]
+            kwargs[name] = OP_ARGS.get(op_id, {}).get(name, ARGS.get(name))
     seen: Set[str] = set()
     with respx.mock(assert_all_called=False) as router:
         router.route().mock(side_effect=lambda req: (seen.add(f"{req.method} {req.url}"), httpx.Response(599))[1])

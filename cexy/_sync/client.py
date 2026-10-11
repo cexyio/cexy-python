@@ -7,6 +7,7 @@ edit that file, not this one.
 
 from __future__ import annotations
 
+import math
 from types import TracebackType
 from typing import Optional, Type
 
@@ -65,6 +66,7 @@ class Client:
         user_agent_suffix: Optional[str] = None,
         *,
         rate_limit_per_minute: Optional[float] = None,
+        order_actions_per_second: Optional[float] = None,
         authenticator: Optional[Authenticator] = None,
         http_client: Optional[httpx.Client] = None,
         allow_insecure: bool = False,
@@ -74,7 +76,11 @@ class Client:
         private request is signed and the secret never leaves the process; a key issued before
         signing existed fails with ``KEY_NOT_SIGNABLE`` (no fallback). ``"headers"``: the
         ``X-API-Key`` and ``X-API-Secret`` headers, which the API is switching off
-        (``SIGNATURE_REQUIRED``); kept only for servers that still accept it."""
+        (``SIGNATURE_REQUIRED``); kept only for servers that still accept it.
+
+        ``order_actions_per_second``: a client-side budget for placements (a batch of N counts N),
+        off by default. A market maker's key has 50 a second on the server: set it to 50 to wait
+        locally instead of being refused. Cancels never count against it."""
         mode = auth
         auth_obj: Optional[Authenticator]
         try:
@@ -88,6 +94,13 @@ class Client:
                 raise ConfigurationError("authenticator must implement cexy.auth.Authenticator")
             auth_obj = authenticator
         self._auth = auth_obj
+        if order_actions_per_second is not None and not (
+            isinstance(order_actions_per_second, (int, float))
+            and not isinstance(order_actions_per_second, bool)
+            and math.isfinite(order_actions_per_second)
+            and order_actions_per_second > 0
+        ):
+            raise ConfigurationError("order_actions_per_second must be a positive number")
         if rate_limit_per_minute is None:
             # Server limits: ~120/min per IP for anonymous requests, ~600/min per key.
             rate_limit_per_minute = (
@@ -100,6 +113,7 @@ class Client:
             max_retries=max_retries,
             user_agent=user_agent(user_agent_suffix),
             rate_limit_per_minute=rate_limit_per_minute,
+            order_actions_per_second=order_actions_per_second,
             http_client=http_client,
         )
         self.markets = Markets(self._transport)

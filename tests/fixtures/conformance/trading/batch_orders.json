@@ -1,0 +1,2764 @@
+{
+ "description": "Batch place (POST /api/v1/trading/orders/batch), batch cancel (POST /api/v1/trading/orders/cancel-batch) and cancel by client order id (DELETE /api/v1/trading/orders/by-client-id/{client_order_id}). TS placeOrders / cancelOrders / cancelOrderByClientId, Python place_orders / cancel_orders / cancel_order_by_client_id, Go PlaceOrders / CancelOrders / CancelOrderByClientID, Rust place_orders / cancel_orders / cancel_order_by_client_id. The runner uses a fake clock and max retries 3. Each attempt item is one HTTP exchange for the batch call, in order: `network_error` (the request was sent and no answer came: an ambiguous failure), or `http_status` with `data` (a 200's `data` object) or `error` (the error body) and optional `headers`. `lookups` answers GET /trading/orders/by-client-id/{cid} (key `cid:<cid>`) and GET /trading/orders/{id} (key `order:<id>`), with the same item shapes; a lookup is sent at most once and is never retried. Rules: (1) the request body is built once, with every missing client_order_id generated before the first attempt, and every attempt sends the same body bytes (`expect.same_body`); each attempt is signed afresh. (2) An attempt is ambiguous when it ended in a network error after sending, in any HTTP 5xx except 501 and 503 (500, 502, 504, and Cloudflare's 520 and 524 included), or in a 200 the SDK cannot use: a body without `data`, an undecodable body, or results that do not match the request (a different count, or an item whose `index` or `client_order_id` is not the one sent at that position). A 429, 501, 503 or any other 4xx is a definite refusal: nothing was acted on. Which network errors count as 'after sending' is per language: an SDK that cannot tell a failed connect from a lost answer counts every network error as ambiguous (TypeScript, Rust); Python and Go count a failed connect as a refusal. (3) After the final 200, a place item's ALREADY_EXISTS, or a cancel entry's INVALID_STATE, is reinterpreted ONLY if an earlier attempt of this call was ambiguous; otherwise it is returned as the server sent it (the caller reused the id, or the order was closed before). (3b) On ANY attempt, a place item error OTHER than ALREADY_EXISTS that carries `details.order_id` (MARKET_UNAVAILABLE when the market stopped while matching, for example) means the order exists: it is `recovered` from details.order_id and details.status, with the rule (4) lookup when status is missing. A place item error with code INTERNAL and no `details.order_id` may follow a committed order: it gets the rule (4) lookup by client_order_id (found: `recovered`; not found or failed: `unknown`). (4) Place recovery: take order_id and status from the error's details; if either is missing, look the order up by client_order_id; if the lookup fails or answers 404, the item is `unknown`. Never place it again. (5) Cancel recovery: look the order up by order_id (or by client_order_id for a cid entry) and report its status; if the lookup fails, the item is `unknown`. (6) Outcomes: place `placed` (order set, no error), `failed` (error, not reinterpreted), `recovered` (status known), `unknown`; cancel `cancelled`, `failed`, `recovered`, `unknown`. Counts are recomputed from the outcomes, never copied from the server: place `placed` = placed + recovered whose status is not `rejected`; `failed` = failed + recovered `rejected`; cancel `cancelled` = cancelled + recovered whose status is `cancelled`; `failed` = failed + recovered with any other status; `unknown` counts the unknown items. (7) A 429 waits retry_after_seconds and is retried with the same body; details.limit `order_actions` holds only placements (place_order, place_orders) for that wait, not reads or cancels (`expect.hold`). (8) A whole-request 4xx other than 429 is raised at once and never retried; this includes the 400 whose details.limit is a number (the batch is larger than the key's whole budget; the SDK never splits it). (9) When place_orders raises after building its body (the request may have been sent), the error carries every client_order_id of the body, generated ones included, in request order, and `maybe_placed`: false only when every attempt was a definite refusal (rule 2); true after any ambiguous attempt, including the failing one, and for any failure that is not an HTTP answer (a network error, a cancelled call, a timeout, an unusable 200). Expected as `error: \"batch\"` with `cause` (the error code, `connection`, or `bad_response`), `maybe_placed`, and `error_cids: \"sent\"` (the cids in the first request body, in order). Local refusals (`validation`) raise before anything is built or sent and carry nothing. Every SDK exports its client_order_id generator so callers can create and save ids before the call. (10) A `.` or `..` client_order_id is refused locally: the server accepts it, but it cannot be used as a path segment to look the order up. `validation` cases are refused locally, before any request; `cid_path` cases give the encoded request path; `cost` gives the client limiter's request tokens and order actions per call. Every `order` object and every 200 lookup `data` is `order_template` overlaid with the fields given (wire names: the order id is `id`). Expected results name it `order_id`: for a placed or recovered-by-lookup item it is the order's `id`, for an item recovered from details it is details.order_id. `orders_count: N` means N limit buys with distinct generated client order ids. Attempt items may also be `{http_status, text}` (a body that is not JSON, sent as is) or `{http_status, body}` (the JSON body exactly as given, not wrapped in `data`). A cancel-batch entry by client_order_id `.` or `..` is also refused locally (rule 10). (11) A details.status of \"unknown\" counts as missing, so the rule (4) lookup runs. (12) A recovery lookup that fails in ANY way (an API or network error, a 200 that is not JSON or not an order, any other error) makes the item `unknown`; the call still returns its result. (13) cancel_orders raises `bad_response` (no ids needed) when the results do not match the entries sent: a different count, or an item whose `index`, `order_id` or `client_order_id` is not the one sent at that position. Note on rule (6): a recovered order is counted placed unless its status is `rejected`, even when it ended `cancelled` with nothing filled (MARKET_UNAVAILABLE after the market stopped): this errs toward not placing it again; read `status` before acting. Lookup items may also be `{http_status, text}`.",
+ "order_template": {
+  "symbol": "BTC/USDT",
+  "side": "buy",
+  "type": "limit",
+  "time_in_force": "gtc",
+  "status": "open",
+  "quantity": "1",
+  "filled_quantity": "0",
+  "remaining_quantity": "1",
+  "filled_quote_quantity": "0",
+  "fee_paid": "0",
+  "reserved_remaining": "0",
+  "created_at": "2026-10-11T00:00:00Z",
+  "updated_at": "2026-10-11T00:00:00Z"
+ },
+ "place": [
+  {
+   "id": "all_placed_first_try",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     },
+     {
+      "client_order_id": "c2",
+      "side": "sell",
+      "type": "limit",
+      "price": "200",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 200,
+     "data": {
+      "placed": 2,
+      "failed": 0,
+      "results": [
+       {
+        "index": 0,
+        "client_order_id": "c1",
+        "order": {
+         "id": "o1",
+         "status": "open"
+        },
+        "fills": [],
+        "error": null
+       },
+       {
+        "index": 1,
+        "client_order_id": "c2",
+        "order": {
+         "id": "o2",
+         "status": "open"
+        },
+        "fills": [],
+        "error": null
+       }
+      ]
+     }
+    }
+   ],
+   "expect": {
+    "calls": 1,
+    "same_body": true,
+    "lookups": [],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "placed",
+      "order_id": "o1",
+      "status": "open"
+     },
+     {
+      "index": 1,
+      "outcome": "placed",
+      "order_id": "o2",
+      "status": "open"
+     }
+    ],
+    "placed": 2,
+    "failed": 0,
+    "unknown": 0
+   }
+  },
+  {
+   "id": "mixed_first_try",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     },
+     {
+      "client_order_id": "c2",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1000"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 200,
+     "data": {
+      "placed": 1,
+      "failed": 1,
+      "results": [
+       {
+        "index": 0,
+        "client_order_id": "c1",
+        "order": {
+         "id": "o1",
+         "status": "open"
+        },
+        "fills": [],
+        "error": null
+       },
+       {
+        "index": 1,
+        "client_order_id": "c2",
+        "order": null,
+        "fills": [],
+        "error": {
+         "code": "INSUFFICIENT_FUNDS",
+         "message": "Insufficient funds",
+         "retryable": false
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "expect": {
+    "calls": 1,
+    "same_body": true,
+    "lookups": [],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "placed",
+      "order_id": "o1",
+      "status": "open"
+     },
+     {
+      "index": 1,
+      "outcome": "failed",
+      "error_code": "INSUFFICIENT_FUNDS"
+     }
+    ],
+    "placed": 1,
+    "failed": 1,
+    "unknown": 0
+   }
+  },
+  {
+   "id": "already_exists_first_try_is_the_callers",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 200,
+     "data": {
+      "placed": 0,
+      "failed": 1,
+      "results": [
+       {
+        "index": 0,
+        "client_order_id": "c1",
+        "order": null,
+        "fills": [],
+        "error": {
+         "code": "ALREADY_EXISTS",
+         "message": "exists",
+         "retryable": false,
+         "details": {
+          "client_order_id": "c1",
+          "order_id": "o7",
+          "status": "filled"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "expect": {
+    "calls": 1,
+    "same_body": true,
+    "lookups": [],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "failed",
+      "error_code": "ALREADY_EXISTS"
+     }
+    ],
+    "placed": 0,
+    "failed": 1,
+    "unknown": 0
+   }
+  },
+  {
+   "id": "timeout_then_recovered_from_details",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     },
+     {
+      "client_order_id": "c2",
+      "side": "sell",
+      "type": "limit",
+      "price": "200",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "network_error": "timeout"
+    },
+    {
+     "http_status": 200,
+     "data": {
+      "placed": 1,
+      "failed": 1,
+      "results": [
+       {
+        "index": 0,
+        "client_order_id": "c1",
+        "order": null,
+        "fills": [],
+        "error": {
+         "code": "ALREADY_EXISTS",
+         "message": "exists",
+         "retryable": false,
+         "details": {
+          "client_order_id": "c1",
+          "order_id": "o1",
+          "status": "open"
+         }
+        }
+       },
+       {
+        "index": 1,
+        "client_order_id": "c2",
+        "order": {
+         "id": "o2",
+         "status": "open"
+        },
+        "fills": [],
+        "error": null
+       }
+      ]
+     }
+    }
+   ],
+   "expect": {
+    "calls": 2,
+    "same_body": true,
+    "lookups": [],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "recovered",
+      "order_id": "o1",
+      "status": "open"
+     },
+     {
+      "index": 1,
+      "outcome": "placed",
+      "order_id": "o2",
+      "status": "open"
+     }
+    ],
+    "placed": 2,
+    "failed": 0,
+    "unknown": 0
+   }
+  },
+  {
+   "id": "recovered_rejected_counts_as_failed",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1000"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 504,
+     "error": {
+      "code": "SERVICE_UNAVAILABLE",
+      "message": "gateway timeout",
+      "retryable": true
+     }
+    },
+    {
+     "http_status": 200,
+     "data": {
+      "placed": 0,
+      "failed": 1,
+      "results": [
+       {
+        "index": 0,
+        "client_order_id": "c1",
+        "order": null,
+        "fills": [],
+        "error": {
+         "code": "ALREADY_EXISTS",
+         "message": "exists",
+         "retryable": false,
+         "details": {
+          "client_order_id": "c1",
+          "order_id": "o1",
+          "status": "rejected"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "expect": {
+    "calls": 2,
+    "same_body": true,
+    "lookups": [],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "recovered",
+      "order_id": "o1",
+      "status": "rejected"
+     }
+    ],
+    "placed": 0,
+    "failed": 1,
+    "unknown": 0
+   }
+  },
+  {
+   "id": "missing_details_looked_up",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "network_error": "timeout"
+    },
+    {
+     "http_status": 200,
+     "data": {
+      "placed": 0,
+      "failed": 1,
+      "results": [
+       {
+        "index": 0,
+        "client_order_id": "c1",
+        "order": null,
+        "fills": [],
+        "error": {
+         "code": "ALREADY_EXISTS",
+         "message": "exists",
+         "retryable": false,
+         "details": {
+          "client_order_id": "c1"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "lookups": {
+    "cid:c1": {
+     "http_status": 200,
+     "data": {
+      "id": "o9",
+      "status": "filled"
+     }
+    }
+   },
+   "expect": {
+    "calls": 2,
+    "same_body": true,
+    "lookups": [
+     "cid:c1"
+    ],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "recovered",
+      "order_id": "o9",
+      "status": "filled"
+     }
+    ],
+    "placed": 1,
+    "failed": 0,
+    "unknown": 0
+   }
+  },
+  {
+   "id": "missing_details_lookup_404_is_unknown",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "network_error": "timeout"
+    },
+    {
+     "http_status": 200,
+     "data": {
+      "placed": 0,
+      "failed": 1,
+      "results": [
+       {
+        "index": 0,
+        "client_order_id": "c1",
+        "order": null,
+        "fills": [],
+        "error": {
+         "code": "ALREADY_EXISTS",
+         "message": "exists",
+         "retryable": false,
+         "details": {
+          "client_order_id": "c1",
+          "status": "open"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "lookups": {
+    "cid:c1": {
+     "http_status": 404,
+     "error": {
+      "code": "NOT_FOUND",
+      "message": "no such order",
+      "retryable": false
+     }
+    }
+   },
+   "expect": {
+    "calls": 2,
+    "same_body": true,
+    "lookups": [
+     "cid:c1"
+    ],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "unknown"
+     }
+    ],
+    "placed": 0,
+    "failed": 0,
+    "unknown": 1
+   }
+  },
+  {
+   "id": "missing_details_lookup_fails_is_unknown",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 502,
+     "error": {
+      "code": "SERVICE_UNAVAILABLE",
+      "message": "bad gateway",
+      "retryable": true
+     }
+    },
+    {
+     "http_status": 200,
+     "data": {
+      "placed": 0,
+      "failed": 1,
+      "results": [
+       {
+        "index": 0,
+        "client_order_id": "c1",
+        "order": null,
+        "fills": [],
+        "error": {
+         "code": "ALREADY_EXISTS",
+         "message": "exists",
+         "retryable": false,
+         "details": {
+          "client_order_id": "c1"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "lookups": {
+    "cid:c1": {
+     "network_error": "timeout"
+    }
+   },
+   "expect": {
+    "calls": 2,
+    "same_body": true,
+    "lookups": [
+     "cid:c1"
+    ],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "unknown"
+     }
+    ],
+    "placed": 0,
+    "failed": 0,
+    "unknown": 1
+   }
+  },
+  {
+   "id": "429_then_already_exists_is_the_callers",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 429,
+     "error": {
+      "code": "RATE_LIMITED",
+      "message": "Too many order actions. Slow down.",
+      "retryable": true,
+      "details": {
+       "retry_after_seconds": 1,
+       "limit": "order_actions"
+      }
+     }
+    },
+    {
+     "http_status": 200,
+     "data": {
+      "placed": 0,
+      "failed": 1,
+      "results": [
+       {
+        "index": 0,
+        "client_order_id": "c1",
+        "order": null,
+        "fills": [],
+        "error": {
+         "code": "ALREADY_EXISTS",
+         "message": "exists",
+         "retryable": false,
+         "details": {
+          "client_order_id": "c1",
+          "order_id": "o7",
+          "status": "open"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "expect": {
+    "calls": 2,
+    "same_body": true,
+    "lookups": [],
+    "hold": "placements",
+    "results": [
+     {
+      "index": 0,
+      "outcome": "failed",
+      "error_code": "ALREADY_EXISTS"
+     }
+    ],
+    "placed": 0,
+    "failed": 1,
+    "unknown": 0
+   }
+  },
+  {
+   "id": "batch_above_whole_budget_not_retried",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 400,
+     "error": {
+      "code": "VALIDATION_FAILED",
+      "message": "20 order actions in one request exceed this key's limit of 10 a second; send fewer at a time",
+      "retryable": false,
+      "details": {
+       "limit": 10
+      }
+     }
+    }
+   ],
+   "expect": {
+    "calls": 1,
+    "error": "batch",
+    "cause": "VALIDATION_FAILED",
+    "maybe_placed": false,
+    "error_cids": "sent",
+    "error_details_limit": 10
+   }
+  },
+  {
+   "id": "forbidden_not_retried",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 403,
+     "error": {
+      "code": "FORBIDDEN",
+      "message": "may not trade",
+      "retryable": false
+     }
+    }
+   ],
+   "expect": {
+    "calls": 1,
+    "error": "batch",
+    "cause": "FORBIDDEN",
+    "maybe_placed": false,
+    "error_cids": "sent"
+   }
+  },
+  {
+   "id": "retries_exhausted_carries_generated_cids",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     },
+     {
+      "client_order_id": "c2",
+      "side": "buy",
+      "type": "limit",
+      "price": "99",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "network_error": "timeout"
+    },
+    {
+     "network_error": "timeout"
+    },
+    {
+     "network_error": "timeout"
+    },
+    {
+     "network_error": "timeout"
+    }
+   ],
+   "expect": {
+    "calls": 4,
+    "same_body": true,
+    "error": "batch",
+    "cause": "connection",
+    "maybe_placed": true,
+    "error_cids": "sent",
+    "generated_cid_indexes": [
+     0
+    ]
+   }
+  },
+  {
+   "id": "generated_cids_kept_across_attempts",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     },
+     {
+      "client_order_id": "mine-1",
+      "side": "buy",
+      "type": "limit",
+      "price": "99",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "network_error": "timeout"
+    },
+    {
+     "http_status": 200,
+     "echo_cids": true,
+     "data": {
+      "placed": 2,
+      "failed": 0,
+      "results": [
+       {
+        "index": 0,
+        "client_order_id": "<generated>",
+        "order": {
+         "id": "o1",
+         "status": "open"
+        },
+        "fills": [],
+        "error": null
+       },
+       {
+        "index": 1,
+        "client_order_id": "mine-1",
+        "order": {
+         "id": "o2",
+         "status": "open"
+        },
+        "fills": [],
+        "error": null
+       }
+      ]
+     }
+    }
+   ],
+   "expect": {
+    "calls": 2,
+    "same_body": true,
+    "generated_cid_indexes": [
+     0
+    ],
+    "lookups": [],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "placed",
+      "order_id": "o1",
+      "status": "open"
+     },
+     {
+      "index": 1,
+      "outcome": "placed",
+      "order_id": "o2",
+      "status": "open"
+     }
+    ],
+    "placed": 2,
+    "failed": 0,
+    "unknown": 0
+   }
+  },
+  {
+   "id": "timeout_then_403_carries_cids",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     },
+     {
+      "client_order_id": "c2",
+      "side": "sell",
+      "type": "limit",
+      "price": "200",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "network_error": "timeout"
+    },
+    {
+     "http_status": 403,
+     "error": {
+      "code": "FORBIDDEN",
+      "message": "may not trade",
+      "retryable": false
+     }
+    }
+   ],
+   "expect": {
+    "calls": 2,
+    "same_body": true,
+    "error": "batch",
+    "cause": "FORBIDDEN",
+    "maybe_placed": true,
+    "error_cids": "sent"
+   }
+  },
+  {
+   "id": "first_500_not_retryable_is_ambiguous",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 500,
+     "error": {
+      "code": "INTERNAL",
+      "message": "internal",
+      "retryable": false
+     }
+    }
+   ],
+   "expect": {
+    "calls": 1,
+    "error": "batch",
+    "cause": "INTERNAL",
+    "maybe_placed": true,
+    "error_cids": "sent"
+   }
+  },
+  {
+   "id": "cloudflare_520_html_is_ambiguous",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 520,
+     "text": "<html><body>error code: 520</body></html>"
+    }
+   ],
+   "expect": {
+    "calls": 1,
+    "error": "batch",
+    "cause": "HTTP_520",
+    "maybe_placed": true,
+    "error_cids": "sent"
+   }
+  },
+  {
+   "id": "cloudflare_524_retried_then_recovered",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 524,
+     "error": {
+      "code": "SERVICE_UNAVAILABLE",
+      "message": "timeout",
+      "retryable": true
+     }
+    },
+    {
+     "http_status": 200,
+     "data": {
+      "placed": 0,
+      "failed": 1,
+      "results": [
+       {
+        "index": 0,
+        "client_order_id": "c1",
+        "order": null,
+        "fills": [],
+        "error": {
+         "code": "ALREADY_EXISTS",
+         "message": "already_exists",
+         "retryable": false,
+         "details": {
+          "client_order_id": "c1",
+          "order_id": "o1",
+          "status": "open"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "expect": {
+    "calls": 2,
+    "same_body": true,
+    "lookups": [],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "recovered",
+      "order_id": "o1",
+      "status": "open"
+     }
+    ],
+    "placed": 1,
+    "failed": 0,
+    "unknown": 0
+   }
+  },
+  {
+   "id": "200_without_data_is_ambiguous",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 200,
+     "body": {}
+    }
+   ],
+   "expect": {
+    "calls": 1,
+    "error": "batch",
+    "cause": "bad_response",
+    "maybe_placed": true,
+    "error_cids": "sent"
+   }
+  },
+  {
+   "id": "200_undecodable_is_ambiguous",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 200,
+     "text": "{\"data\": {\"placed\": 1, \"res"
+    }
+   ],
+   "expect": {
+    "calls": 1,
+    "error": "batch",
+    "cause": "bad_response",
+    "maybe_placed": true,
+    "error_cids": "sent"
+   }
+  },
+  {
+   "id": "200_result_count_mismatch_is_ambiguous",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     },
+     {
+      "client_order_id": "c2",
+      "side": "sell",
+      "type": "limit",
+      "price": "200",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 200,
+     "data": {
+      "placed": 1,
+      "failed": 0,
+      "results": [
+       {
+        "index": 0,
+        "client_order_id": "c1",
+        "order": {
+         "id": "o1",
+         "status": "open"
+        },
+        "fills": [],
+        "error": null
+       }
+      ]
+     }
+    }
+   ],
+   "expect": {
+    "calls": 1,
+    "error": "batch",
+    "cause": "bad_response",
+    "maybe_placed": true,
+    "error_cids": "sent"
+   }
+  },
+  {
+   "id": "200_result_cid_mismatch_is_ambiguous",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     },
+     {
+      "client_order_id": "c2",
+      "side": "sell",
+      "type": "limit",
+      "price": "200",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 200,
+     "data": {
+      "placed": 2,
+      "failed": 0,
+      "results": [
+       {
+        "index": 0,
+        "client_order_id": "c1",
+        "order": {
+         "id": "o1",
+         "status": "open"
+        },
+        "fills": [],
+        "error": null
+       },
+       {
+        "index": 1,
+        "client_order_id": "zz",
+        "order": {
+         "id": "o2",
+         "status": "open"
+        },
+        "fills": [],
+        "error": null
+       }
+      ]
+     }
+    }
+   ],
+   "expect": {
+    "calls": 1,
+    "error": "batch",
+    "cause": "bad_response",
+    "maybe_placed": true,
+    "error_cids": "sent"
+   }
+  },
+  {
+   "id": "200_result_index_mismatch_is_ambiguous",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     },
+     {
+      "client_order_id": "c2",
+      "side": "sell",
+      "type": "limit",
+      "price": "200",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 200,
+     "data": {
+      "placed": 2,
+      "failed": 0,
+      "results": [
+       {
+        "index": 1,
+        "client_order_id": "c1",
+        "order": {
+         "id": "o1",
+         "status": "open"
+        },
+        "fills": [],
+        "error": null
+       },
+       {
+        "index": 0,
+        "client_order_id": "c2",
+        "order": {
+         "id": "o2",
+         "status": "open"
+        },
+        "fills": [],
+        "error": null
+       }
+      ]
+     }
+    }
+   ],
+   "expect": {
+    "calls": 1,
+    "error": "batch",
+    "cause": "bad_response",
+    "maybe_placed": true,
+    "error_cids": "sent"
+   }
+  },
+  {
+   "id": "market_unavailable_with_order_id_is_recovered_first_try",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     },
+     {
+      "client_order_id": "c2",
+      "side": "sell",
+      "type": "limit",
+      "price": "200",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 200,
+     "data": {
+      "placed": 0,
+      "failed": 2,
+      "results": [
+       {
+        "index": 0,
+        "client_order_id": "c1",
+        "order": null,
+        "fills": [],
+        "error": {
+         "code": "MARKET_UNAVAILABLE",
+         "message": "market_unavailable",
+         "retryable": false,
+         "details": {
+          "order_id": "o1",
+          "status": "partially_filled"
+         }
+        }
+       },
+       {
+        "index": 1,
+        "client_order_id": "c2",
+        "order": null,
+        "fills": [],
+        "error": {
+         "code": "MARKET_UNAVAILABLE",
+         "message": "market_unavailable",
+         "retryable": false
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "expect": {
+    "calls": 1,
+    "same_body": true,
+    "lookups": [],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "recovered",
+      "order_id": "o1",
+      "status": "partially_filled"
+     },
+     {
+      "index": 1,
+      "outcome": "failed",
+      "error_code": "MARKET_UNAVAILABLE"
+     }
+    ],
+    "placed": 1,
+    "failed": 1,
+    "unknown": 0
+   }
+  },
+  {
+   "id": "item_error_with_order_id_but_no_status_is_looked_up",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 200,
+     "data": {
+      "placed": 0,
+      "failed": 1,
+      "results": [
+       {
+        "index": 0,
+        "client_order_id": "c1",
+        "order": null,
+        "fills": [],
+        "error": {
+         "code": "MARKET_UNAVAILABLE",
+         "message": "market_unavailable",
+         "retryable": false,
+         "details": {
+          "order_id": "o1"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "lookups": {
+    "cid:c1": {
+     "http_status": 200,
+     "data": {
+      "id": "o1",
+      "status": "filled"
+     }
+    }
+   },
+   "expect": {
+    "calls": 1,
+    "same_body": true,
+    "lookups": [
+     "cid:c1"
+    ],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "recovered",
+      "order_id": "o1",
+      "status": "filled"
+     }
+    ],
+    "placed": 1,
+    "failed": 0,
+    "unknown": 0
+   }
+  },
+  {
+   "id": "item_internal_is_looked_up",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     },
+     {
+      "client_order_id": "c2",
+      "side": "sell",
+      "type": "limit",
+      "price": "200",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 200,
+     "data": {
+      "placed": 0,
+      "failed": 2,
+      "results": [
+       {
+        "index": 0,
+        "client_order_id": "c1",
+        "order": null,
+        "fills": [],
+        "error": {
+         "code": "INTERNAL",
+         "message": "internal",
+         "retryable": false
+        }
+       },
+       {
+        "index": 1,
+        "client_order_id": "c2",
+        "order": null,
+        "fills": [],
+        "error": {
+         "code": "INTERNAL",
+         "message": "internal",
+         "retryable": false
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "lookups": {
+    "cid:c1": {
+     "http_status": 200,
+     "data": {
+      "id": "o1",
+      "status": "open"
+     }
+    },
+    "cid:c2": {
+     "http_status": 404,
+     "error": {
+      "code": "NOT_FOUND",
+      "message": "no such order",
+      "retryable": false
+     }
+    }
+   },
+   "expect": {
+    "calls": 1,
+    "same_body": true,
+    "lookups": [
+     "cid:c1",
+     "cid:c2"
+    ],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "recovered",
+      "order_id": "o1",
+      "status": "open"
+     },
+     {
+      "index": 1,
+      "outcome": "unknown"
+     }
+    ],
+    "placed": 1,
+    "failed": 0,
+    "unknown": 1
+   }
+  },
+  {
+   "id": "timeout_then_429_then_already_exists_is_recovered",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "network_error": "timeout"
+    },
+    {
+     "http_status": 429,
+     "error": {
+      "code": "RATE_LIMITED",
+      "message": "slow",
+      "retryable": true,
+      "details": {
+       "retry_after_seconds": 1
+      }
+     }
+    },
+    {
+     "http_status": 200,
+     "data": {
+      "placed": 0,
+      "failed": 1,
+      "results": [
+       {
+        "index": 0,
+        "client_order_id": "c1",
+        "order": null,
+        "fills": [],
+        "error": {
+         "code": "ALREADY_EXISTS",
+         "message": "already_exists",
+         "retryable": false,
+         "details": {
+          "client_order_id": "c1",
+          "order_id": "o1",
+          "status": "filled"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "expect": {
+    "calls": 3,
+    "same_body": true,
+    "lookups": [],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "recovered",
+      "order_id": "o1",
+      "status": "filled"
+     }
+    ],
+    "placed": 1,
+    "failed": 0,
+    "unknown": 0
+   }
+  },
+  {
+   "id": "mixed_retry_result",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     },
+     {
+      "client_order_id": "c2",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     },
+     {
+      "client_order_id": "c3",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     },
+     {
+      "client_order_id": "c4",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "network_error": "timeout"
+    },
+    {
+     "http_status": 200,
+     "data": {
+      "placed": 1,
+      "failed": 3,
+      "results": [
+       {
+        "index": 0,
+        "client_order_id": "c1",
+        "order": null,
+        "fills": [],
+        "error": {
+         "code": "ALREADY_EXISTS",
+         "message": "already_exists",
+         "retryable": false,
+         "details": {
+          "client_order_id": "c1",
+          "order_id": "o1",
+          "status": "open"
+         }
+        }
+       },
+       {
+        "index": 1,
+        "client_order_id": "c2",
+        "order": {
+         "id": "o2",
+         "status": "open"
+        },
+        "fills": [],
+        "error": null
+       },
+       {
+        "index": 2,
+        "client_order_id": "c3",
+        "order": null,
+        "fills": [],
+        "error": {
+         "code": "INSUFFICIENT_FUNDS",
+         "message": "insufficient_funds",
+         "retryable": false
+        }
+       },
+       {
+        "index": 3,
+        "client_order_id": "c4",
+        "order": null,
+        "fills": [],
+        "error": {
+         "code": "ALREADY_EXISTS",
+         "message": "already_exists",
+         "retryable": false,
+         "details": {
+          "client_order_id": "c4",
+          "order_id": "o_old",
+          "status": "cancelled"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "expect": {
+    "calls": 2,
+    "same_body": true,
+    "lookups": [],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "recovered",
+      "order_id": "o1",
+      "status": "open"
+     },
+     {
+      "index": 1,
+      "outcome": "placed",
+      "order_id": "o2",
+      "status": "open"
+     },
+     {
+      "index": 2,
+      "outcome": "failed",
+      "error_code": "INSUFFICIENT_FUNDS"
+     },
+     {
+      "index": 3,
+      "outcome": "recovered",
+      "order_id": "o_old",
+      "status": "cancelled"
+     }
+    ],
+    "placed": 3,
+    "failed": 1,
+    "unknown": 0
+   },
+   "note": "Index 3 is a cid the caller reused from an older order; after an ambiguous attempt it cannot be told apart from one this call placed, so it is reported recovered with that order's real state (QA Q1: nothing invented, nothing placed twice)."
+  },
+  {
+   "id": "503_then_already_exists_is_the_callers",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 503,
+     "error": {
+      "code": "SERVICE_UNAVAILABLE",
+      "message": "down",
+      "retryable": true
+     }
+    },
+    {
+     "http_status": 200,
+     "data": {
+      "placed": 0,
+      "failed": 1,
+      "results": [
+       {
+        "index": 0,
+        "client_order_id": "c1",
+        "order": null,
+        "fills": [],
+        "error": {
+         "code": "ALREADY_EXISTS",
+         "message": "already_exists",
+         "retryable": false,
+         "details": {
+          "client_order_id": "c1",
+          "order_id": "o7",
+          "status": "open"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "expect": {
+    "calls": 2,
+    "same_body": true,
+    "lookups": [],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "failed",
+      "error_code": "ALREADY_EXISTS"
+     }
+    ],
+    "placed": 0,
+    "failed": 1,
+    "unknown": 0
+   }
+  },
+  {
+   "id": "order_actions_429_over_120s_raises_and_holds",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 429,
+     "error": {
+      "code": "RATE_LIMITED",
+      "message": "Too many order actions. Slow down.",
+      "retryable": true,
+      "details": {
+       "retry_after_seconds": 300,
+       "limit": "order_actions"
+      }
+     }
+    }
+   ],
+   "expect": {
+    "calls": 1,
+    "hold": "placements",
+    "error": "batch",
+    "cause": "RATE_LIMITED",
+    "maybe_placed": false,
+    "error_cids": "sent"
+   }
+  },
+  {
+   "id": "details_status_unknown_is_looked_up",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 200,
+     "data": {
+      "placed": 0,
+      "failed": 1,
+      "results": [
+       {
+        "index": 0,
+        "client_order_id": "c1",
+        "order": null,
+        "fills": [],
+        "error": {
+         "code": "MARKET_UNAVAILABLE",
+         "message": "market_unavailable",
+         "retryable": false,
+         "details": {
+          "order_id": "o1",
+          "status": "unknown"
+         }
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "lookups": {
+    "cid:c1": {
+     "http_status": 200,
+     "data": {
+      "id": "o1",
+      "status": "filled"
+     }
+    }
+   },
+   "expect": {
+    "calls": 1,
+    "same_body": true,
+    "lookups": [
+     "cid:c1"
+    ],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "recovered",
+      "order_id": "o1",
+      "status": "filled"
+     }
+    ],
+    "placed": 1,
+    "failed": 0,
+    "unknown": 0
+   }
+  },
+  {
+   "id": "lookup_answering_a_non_json_200_is_unknown",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "limit",
+      "price": "100",
+      "quantity": "1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 200,
+     "data": {
+      "placed": 0,
+      "failed": 1,
+      "results": [
+       {
+        "index": 0,
+        "client_order_id": "c1",
+        "order": null,
+        "fills": [],
+        "error": {
+         "code": "INTERNAL",
+         "message": "internal",
+         "retryable": false
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "lookups": {
+    "cid:c1": {
+     "http_status": 200,
+     "text": "<html>maintenance</html>"
+    }
+   },
+   "expect": {
+    "calls": 1,
+    "same_body": true,
+    "lookups": [
+     "cid:c1"
+    ],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "unknown"
+     }
+    ],
+    "placed": 0,
+    "failed": 0,
+    "unknown": 1
+   }
+  }
+ ],
+ "cancel": [
+  {
+   "id": "invalid_state_first_try_is_returned",
+   "request": {
+    "orders": [
+     {
+      "order_id": "o1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 200,
+     "data": {
+      "cancelled": 0,
+      "failed": 1,
+      "results": [
+       {
+        "index": 0,
+        "order_id": "o1",
+        "client_order_id": null,
+        "order": null,
+        "error": {
+         "code": "INVALID_STATE",
+         "message": "This order is no longer open",
+         "retryable": false
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "expect": {
+    "calls": 1,
+    "same_body": true,
+    "lookups": [],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "failed",
+      "error_code": "INVALID_STATE"
+     }
+    ],
+    "cancelled": 0,
+    "failed": 1,
+    "unknown": 0
+   }
+  },
+  {
+   "id": "timeout_then_invalid_state_looked_up",
+   "request": {
+    "orders": [
+     {
+      "order_id": "o1"
+     },
+     {
+      "client_order_id": "c2"
+     },
+     {
+      "order_id": "o3"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "network_error": "timeout"
+    },
+    {
+     "http_status": 200,
+     "data": {
+      "cancelled": 1,
+      "failed": 2,
+      "results": [
+       {
+        "index": 0,
+        "order_id": "o1",
+        "client_order_id": null,
+        "order": null,
+        "error": {
+         "code": "INVALID_STATE",
+         "message": "This order is no longer open",
+         "retryable": false
+        }
+       },
+       {
+        "index": 1,
+        "order_id": null,
+        "client_order_id": "c2",
+        "order": null,
+        "error": {
+         "code": "INVALID_STATE",
+         "message": "This order is no longer open",
+         "retryable": false
+        }
+       },
+       {
+        "index": 2,
+        "order_id": "o3",
+        "client_order_id": null,
+        "order": {
+         "id": "o3",
+         "status": "cancelled"
+        },
+        "error": null
+       }
+      ]
+     }
+    }
+   ],
+   "lookups": {
+    "order:o1": {
+     "http_status": 200,
+     "data": {
+      "id": "o1",
+      "status": "cancelled"
+     }
+    },
+    "cid:c2": {
+     "http_status": 200,
+     "data": {
+      "id": "o2",
+      "status": "filled"
+     }
+    }
+   },
+   "expect": {
+    "calls": 2,
+    "same_body": true,
+    "lookups": [
+     "order:o1",
+     "cid:c2"
+    ],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "recovered",
+      "order_id": "o1",
+      "status": "cancelled"
+     },
+     {
+      "index": 1,
+      "outcome": "recovered",
+      "order_id": "o2",
+      "status": "filled"
+     },
+     {
+      "index": 2,
+      "outcome": "cancelled",
+      "order_id": "o3",
+      "status": "cancelled"
+     }
+    ],
+    "cancelled": 2,
+    "failed": 1,
+    "unknown": 0
+   }
+  },
+  {
+   "id": "lookup_fails_is_unknown",
+   "request": {
+    "orders": [
+     {
+      "order_id": "o1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 500,
+     "error": {
+      "code": "INTERNAL",
+      "message": "internal",
+      "retryable": true
+     }
+    },
+    {
+     "http_status": 200,
+     "data": {
+      "cancelled": 0,
+      "failed": 1,
+      "results": [
+       {
+        "index": 0,
+        "order_id": "o1",
+        "client_order_id": null,
+        "order": null,
+        "error": {
+         "code": "INVALID_STATE",
+         "message": "This order is no longer open",
+         "retryable": false
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "lookups": {
+    "order:o1": {
+     "http_status": 503,
+     "error": {
+      "code": "SERVICE_UNAVAILABLE",
+      "message": "down",
+      "retryable": true
+     }
+    }
+   },
+   "expect": {
+    "calls": 2,
+    "same_body": true,
+    "lookups": [
+     "order:o1"
+    ],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "unknown"
+     }
+    ],
+    "cancelled": 0,
+    "failed": 0,
+    "unknown": 1
+   }
+  },
+  {
+   "id": "not_found_after_retry_is_returned",
+   "request": {
+    "orders": [
+     {
+      "order_id": "o1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "network_error": "timeout"
+    },
+    {
+     "http_status": 200,
+     "data": {
+      "cancelled": 0,
+      "failed": 1,
+      "results": [
+       {
+        "index": 0,
+        "order_id": "o1",
+        "client_order_id": null,
+        "order": null,
+        "error": {
+         "code": "NOT_FOUND",
+         "message": "no such order",
+         "retryable": false
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "expect": {
+    "calls": 2,
+    "same_body": true,
+    "lookups": [],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "failed",
+      "error_code": "NOT_FOUND"
+     }
+    ],
+    "cancelled": 0,
+    "failed": 1,
+    "unknown": 0
+   }
+  },
+  {
+   "id": "order_actions_429_does_not_hold_cancels",
+   "request": {
+    "orders": [
+     {
+      "order_id": "o1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 429,
+     "error": {
+      "code": "RATE_LIMITED",
+      "message": "Too many order actions. Slow down.",
+      "retryable": true,
+      "details": {
+       "retry_after_seconds": 1,
+       "limit": "order_actions"
+      }
+     }
+    },
+    {
+     "http_status": 200,
+     "data": {
+      "cancelled": 1,
+      "failed": 0,
+      "results": [
+       {
+        "index": 0,
+        "order_id": "o1",
+        "client_order_id": null,
+        "order": {
+         "id": "o1",
+         "status": "cancelled"
+        },
+        "error": null
+       }
+      ]
+     }
+    }
+   ],
+   "expect": {
+    "calls": 2,
+    "same_body": true,
+    "lookups": [],
+    "hold": "placements",
+    "results": [
+     {
+      "index": 0,
+      "outcome": "cancelled",
+      "order_id": "o1",
+      "status": "cancelled"
+     }
+    ],
+    "cancelled": 1,
+    "failed": 0,
+    "unknown": 0
+   }
+  },
+  {
+   "id": "cloudflare_520_then_invalid_state_looked_up",
+   "request": {
+    "orders": [
+     {
+      "order_id": "o1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 520,
+     "error": {
+      "code": "SERVICE_UNAVAILABLE",
+      "message": "origin error",
+      "retryable": true
+     }
+    },
+    {
+     "http_status": 200,
+     "data": {
+      "cancelled": 0,
+      "failed": 1,
+      "results": [
+       {
+        "index": 0,
+        "order_id": "o1",
+        "client_order_id": null,
+        "order": null,
+        "error": {
+         "code": "INVALID_STATE",
+         "message": "This order is no longer open",
+         "retryable": false
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "lookups": {
+    "order:o1": {
+     "http_status": 200,
+     "data": {
+      "id": "o1",
+      "status": "cancelled"
+     }
+    }
+   },
+   "expect": {
+    "calls": 2,
+    "same_body": true,
+    "lookups": [
+     "order:o1"
+    ],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "recovered",
+      "order_id": "o1",
+      "status": "cancelled"
+     }
+    ],
+    "cancelled": 1,
+    "failed": 0,
+    "unknown": 0
+   }
+  },
+  {
+   "id": "result_id_mismatch_raises",
+   "request": {
+    "orders": [
+     {
+      "order_id": "o1"
+     },
+     {
+      "order_id": "o2"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 200,
+     "data": {
+      "cancelled": 2,
+      "failed": 0,
+      "results": [
+       {
+        "index": 0,
+        "order_id": "o1",
+        "client_order_id": null,
+        "order": {
+         "id": "o1",
+         "status": "cancelled"
+        },
+        "error": null
+       },
+       {
+        "index": 1,
+        "order_id": "o9",
+        "client_order_id": null,
+        "order": {
+         "id": "o9",
+         "status": "cancelled"
+        },
+        "error": null
+       }
+      ]
+     }
+    }
+   ],
+   "expect": {
+    "calls": 1,
+    "error": "bad_response"
+   }
+  },
+  {
+   "id": "result_count_mismatch_raises",
+   "request": {
+    "orders": [
+     {
+      "order_id": "o1"
+     },
+     {
+      "client_order_id": "c2"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "http_status": 200,
+     "data": {
+      "cancelled": 1,
+      "failed": 0,
+      "results": [
+       {
+        "index": 0,
+        "order_id": "o1",
+        "client_order_id": null,
+        "order": {
+         "id": "o1",
+         "status": "cancelled"
+        },
+        "error": null
+       }
+      ]
+     }
+    }
+   ],
+   "expect": {
+    "calls": 1,
+    "error": "bad_response"
+   }
+  },
+  {
+   "id": "lookup_answering_a_non_json_200_is_unknown",
+   "request": {
+    "orders": [
+     {
+      "client_order_id": "c1"
+     }
+    ]
+   },
+   "attempts": [
+    {
+     "network_error": "timeout"
+    },
+    {
+     "http_status": 200,
+     "data": {
+      "cancelled": 0,
+      "failed": 1,
+      "results": [
+       {
+        "index": 0,
+        "order_id": null,
+        "client_order_id": "c1",
+        "order": null,
+        "error": {
+         "code": "INVALID_STATE",
+         "message": "This order is no longer open",
+         "retryable": false
+        }
+       }
+      ]
+     }
+    }
+   ],
+   "lookups": {
+    "cid:c1": {
+     "http_status": 200,
+     "text": "<html>maintenance</html>"
+    }
+   },
+   "expect": {
+    "calls": 2,
+    "same_body": true,
+    "lookups": [
+     "cid:c1"
+    ],
+    "results": [
+     {
+      "index": 0,
+      "outcome": "unknown"
+     }
+    ],
+    "cancelled": 0,
+    "failed": 0,
+    "unknown": 1
+   }
+  }
+ ],
+ "cancel_by_client_id": [
+  {
+   "id": "timeout_then_invalid_state_returns_current_order",
+   "client_order_id": "c1",
+   "attempts": [
+    {
+     "network_error": "timeout"
+    },
+    {
+     "http_status": 409,
+     "error": {
+      "code": "INVALID_STATE",
+      "message": "This order is no longer open",
+      "retryable": false
+     }
+    }
+   ],
+   "lookups": {
+    "cid:c1": {
+     "http_status": 200,
+     "data": {
+      "id": "o1",
+      "status": "cancelled"
+     }
+    }
+   },
+   "expect": {
+    "calls": 2,
+    "lookups": [
+     "cid:c1"
+    ],
+    "order_id": "o1",
+    "status": "cancelled"
+   }
+  },
+  {
+   "id": "invalid_state_first_try_raises",
+   "client_order_id": "c1",
+   "attempts": [
+    {
+     "http_status": 409,
+     "error": {
+      "code": "INVALID_STATE",
+      "message": "This order is no longer open",
+      "retryable": false
+     }
+    }
+   ],
+   "expect": {
+    "calls": 1,
+    "lookups": [],
+    "error_code": "INVALID_STATE"
+   }
+  }
+ ],
+ "validation": [
+  {
+   "id": "place_no_orders",
+   "call": "place",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": []
+   }
+  },
+  {
+   "id": "place_21_orders",
+   "call": "place",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders_count": 21
+   }
+  },
+  {
+   "id": "place_duplicate_cid",
+   "call": "place",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "market",
+      "quantity": "1"
+     },
+     {
+      "client_order_id": "c1",
+      "side": "buy",
+      "type": "market",
+      "quantity": "1"
+     }
+    ]
+   }
+  },
+  {
+   "id": "place_cid_with_space",
+   "call": "place",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "a b",
+      "side": "buy",
+      "type": "market",
+      "quantity": "1"
+     }
+    ]
+   }
+  },
+  {
+   "id": "place_cid_with_slash",
+   "call": "place",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "a/b",
+      "side": "buy",
+      "type": "market",
+      "quantity": "1"
+     }
+    ]
+   }
+  },
+  {
+   "id": "place_cid_65_chars",
+   "call": "place",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "side": "buy",
+      "type": "market",
+      "quantity": "1"
+     }
+    ]
+   }
+  },
+  {
+   "id": "place_cid_empty",
+   "call": "place",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "",
+      "side": "buy",
+      "type": "market",
+      "quantity": "1"
+     }
+    ]
+   }
+  },
+  {
+   "id": "cancel_no_entries",
+   "call": "cancel",
+   "request": {
+    "orders": []
+   }
+  },
+  {
+   "id": "cancel_51_entries",
+   "call": "cancel",
+   "request": {
+    "orders_count": 51
+   }
+  },
+  {
+   "id": "cancel_entry_with_both_ids",
+   "call": "cancel",
+   "request": {
+    "orders": [
+     {
+      "order_id": "o1",
+      "client_order_id": "c1"
+     }
+    ]
+   }
+  },
+  {
+   "id": "cancel_entry_with_neither_id",
+   "call": "cancel",
+   "request": {
+    "orders": [
+     {}
+    ]
+   }
+  },
+  {
+   "id": "place_cid_dot",
+   "call": "place",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": ".",
+      "side": "buy",
+      "type": "market",
+      "quantity": "1"
+     }
+    ]
+   }
+  },
+  {
+   "id": "place_cid_dot_dot",
+   "call": "place",
+   "request": {
+    "symbol": "BTC/USDT",
+    "orders": [
+     {
+      "client_order_id": "..",
+      "side": "buy",
+      "type": "market",
+      "quantity": "1"
+     }
+    ]
+   }
+  },
+  {
+   "id": "cancel_cid_dot_dot",
+   "call": "cancel",
+   "request": {
+    "orders": [
+     {
+      "client_order_id": ".."
+     }
+    ]
+   }
+  }
+ ],
+ "valid": [
+  {
+   "id": "place_cid_64_chars_all_classes",
+   "call": "place",
+   "client_order_id": "Az09_-.:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  {
+   "id": "place_20_orders",
+   "call": "place",
+   "orders_count": 20
+  },
+  {
+   "id": "cancel_50_entries",
+   "call": "cancel",
+   "orders_count": 50
+  }
+ ],
+ "cid_path": [
+  {
+   "client_order_id": "q-1717171717-001",
+   "path": "/api/v1/trading/orders/by-client-id/q-1717171717-001"
+  },
+  {
+   "client_order_id": "a/b",
+   "path": "/api/v1/trading/orders/by-client-id/a%2Fb"
+  },
+  {
+   "client_order_id": "50%",
+   "path": "/api/v1/trading/orders/by-client-id/50%25"
+  },
+  {
+   "client_order_id": "a b",
+   "path": "/api/v1/trading/orders/by-client-id/a%20b"
+  }
+ ],
+ "cost": {
+  "description": "request_tokens: tokens the client rate limiter takes; order_actions: tokens the optional order-actions limiter takes (off by default). N is the number of orders or entries. Matches the server's charge on P0-R2 684f1eb: on the mm tier only placements spend order actions (founder 2026-10-11, cancels exempt); on the default tier each batch entry is one request.",
+  "calls": {
+   "place_order": {
+    "request_tokens": "1",
+    "order_actions": "1"
+   },
+   "place_orders": {
+    "request_tokens": "N",
+    "order_actions": "N"
+   },
+   "cancel_order": {
+    "request_tokens": "1",
+    "order_actions": "0"
+   },
+   "cancel_order_by_client_id": {
+    "request_tokens": "1",
+    "order_actions": "0"
+   },
+   "cancel_orders": {
+    "request_tokens": "N",
+    "order_actions": "0"
+   },
+   "cancel_all": {
+    "request_tokens": "1",
+    "order_actions": "0"
+   }
+  }
+ }
+}

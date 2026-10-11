@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import logging
 import math
+import random
 import time
 import uuid
 from time import monotonic as _monotonic
-from typing import Any, Callable, Dict, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 import httpx
 
@@ -25,7 +26,7 @@ from cexy._common import (
     lower_headers,
     operation,
 )
-from cexy._ratelimit import TokenBucket
+from cexy._ratelimit import HOLD_JITTER_S, MAX_WAIT_S, TokenBucket
 from cexy._retry import MAX_SERVER_WAIT_S, RetryPolicy
 from cexy.auth import Authenticator, HmacAuth, redact_text
 from cexy.errors import (
@@ -40,13 +41,33 @@ logger = logging.getLogger("cexy")
 
 #: Network errors raised before the request could have reached the server.
 _NOT_SENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
-#: 5xx statuses where the server may or may not have acted.
-_AMBIGUOUS_STATUS = frozenset({500, 502, 504})
-#: Mutations that are safe to repeat without an Idempotency-Key: place_order (its
-#: client_order_id makes the server refuse a repeat; see ``recover``), cancel_order and
-#: cancel_all (cancelling twice changes nothing more) and cancel_all_after (a repeated arm leaves a
-#: deadline no earlier, a repeated disarm leaves it disarmed).
-REPEAT_SAFE_MUTATIONS = frozenset({"place_order", "cancel_order", "cancel_all", "cancel_all_after"})
+
+
+def is_ambiguous_status(status: int) -> bool:
+    """A 5xx where the server may or may not have acted: every 5xx except 501 (not implemented)
+    and 503 (refused before acting), so 500, 502, 504 and Cloudflare's 520 and 524 included."""
+    return 500 <= status < 600 and status not in (501, 503)
+
+
+#: Mutations that are safe to repeat without an Idempotency-Key: place_order and place_batch (a
+#: client_order_id makes the server refuse a repeat; see ``recover`` and ``attempts``),
+#: cancel_order, cancel_order_by_client_id, cancel_batch and cancel_all (cancelling twice changes
+#: nothing more) and cancel_all_after (a repeated arm leaves a deadline no earlier, a repeated
+#: disarm leaves it disarmed).
+REPEAT_SAFE_MUTATIONS = frozenset(
+    {
+        "place_order",
+        "place_batch",
+        "cancel_order",
+        "cancel_order_by_client_id",
+        "cancel_batch",
+        "cancel_all",
+        "cancel_all_after",
+    }
+)
+#: ``details.limit`` on a 429 that refused order actions (a market maker's per-second budget, or a
+#: batch's entries on the default tier). It holds only placements, never reads or cancels.
+ORDER_ACTIONS_LIMIT = "order_actions"
 
 
 class SyncTransport:
@@ -59,6 +80,7 @@ class SyncTransport:
         max_retries: int,
         user_agent: str,
         rate_limit_per_minute: float,
+        order_actions_per_second: Optional[float] = None,
         http_client: Optional[httpx.Client] = None,
     ) -> None:
         self.base_url = base_url
@@ -68,6 +90,16 @@ class SyncTransport:
         self._sleep = time.sleep
         self._clock = _monotonic  # injectable for tests; the limiter and cancel_all's loop use it
         self.limiter = TokenBucket(per_minute=rate_limit_per_minute, clock=lambda: self._clock())
+        # Placements only: an optional per-second budget (a market maker's key) and the hold set by
+        # an order-actions 429.
+        self.order_limiter: Optional[TokenBucket] = None
+        if order_actions_per_second is not None:
+            self.order_limiter = TokenBucket(
+                per_minute=order_actions_per_second * 60,
+                burst=order_actions_per_second,
+                clock=lambda: self._clock(),
+            )
+        self._placements_held_until = 0.0
         self._owns_http = http_client is None
         self.http = http_client or httpx.Client(timeout=timeout, follow_redirects=False)
 
@@ -77,6 +109,19 @@ class SyncTransport:
     def close(self) -> None:
         if self._owns_http:
             self.http.close()
+
+    def _hold_placements(self, seconds: float) -> None:
+        if not isinstance(seconds, (int, float)) or not math.isfinite(seconds) or seconds <= 0:
+            return
+        until = self._clock() + min(float(seconds), MAX_WAIT_S)
+        self._placements_held_until = max(self._placements_held_until, until)
+
+    def _placement_wait(self, actions: int) -> float:
+        held = max(0.0, self._placements_held_until - self._clock())
+        if held > 0:
+            held += random.uniform(0, HOLD_JITTER_S)  # noqa: S311 - jitter, not security
+        budget = self.order_limiter.acquire(actions) if self.order_limiter is not None else 0.0
+        return min(max(held, budget), MAX_WAIT_S)
 
     def request(
         self,
@@ -91,6 +136,9 @@ class SyncTransport:
         on_retry_error: Optional[Callable[[CexyApiError], Any]] = None,
         max_retries: Optional[int] = None,
         keep_null: bool = False,
+        cost: int = 1,
+        order_actions: int = 0,
+        attempts: Optional[List[str]] = None,
     ) -> Any:
         """Send one logical request, retrying where that is safe.
 
@@ -106,6 +154,13 @@ class SyncTransport:
         until_done loop passes 0 and does its own retrying, so every HTTP request is one round.
 
         ``keep_null``: send ``None`` values in ``body`` as JSON null instead of dropping them.
+
+        ``cost``: request tokens this call takes from the client limiter (a batch of N takes N).
+        ``order_actions``: placements in this call (0 for anything else); they wait out an
+        order-actions hold and the optional per-second order budget.
+        ``attempts``: if given, one entry is appended per failed attempt: ``"ambiguous"`` (the server
+        may have acted: a network error after sending, or 500/502/504) or ``"refused"`` (it did
+        not). The batch calls read it to tell a lost answer from a definite refusal.
 
         A mutation is retried only when it is repeat-safe: it carries an ``Idempotency-Key``
         (pool join/exit), or it is one of ``REPEAT_SAFE_MUTATIONS`` (place_order through its
@@ -134,7 +189,9 @@ class SyncTransport:
         attempt = 0
         skew_resent = False
         while True:
-            wait = self.limiter.acquire()
+            wait = self.limiter.acquire(cost)
+            if order_actions > 0:
+                wait = max(wait, self._placement_wait(order_actions))
             if wait > 0:
                 logger.debug("cexy: client rate limiter waiting %.2fs", wait)
                 self._sleep(wait)
@@ -148,6 +205,8 @@ class SyncTransport:
                 resp = self.http.request(op.method, url, content=content, headers=send_headers, follow_redirects=False)
             except httpx.TransportError as exc:
                 ambiguous = not isinstance(exc, _NOT_SENT)
+                if attempts is not None:
+                    attempts.append("ambiguous" if ambiguous else "refused")
                 reason = redact_text(f"{type(exc).__name__}: {exc}", self._secrets())
                 logger.debug("cexy: %s %s network error (attempt %d): %s", op.method, op.path, attempt, reason)
                 if attempt >= retries:
@@ -177,6 +236,8 @@ class SyncTransport:
                 return resp.json()
 
             err = from_response(resp.status_code, _json_or_none(resp), resp_headers, self._secrets())
+            if attempts is not None:
+                attempts.append("ambiguous" if is_ambiguous_status(resp.status_code) else "refused")
             if err.code == "SIGNATURE_REQUIRED":
                 raise type(err)(
                     err.code,
@@ -218,8 +279,13 @@ class SyncTransport:
                 # Shared hold: every request of this client waits out the server's hint, not only
                 # this one. A hint above 120 s holds for 120 s (the limiter caps it).
                 hint = retry_after_seconds(resp_headers, err.details)
+                placements_held = False
                 if hint is not None:
-                    self.limiter.block_for(hint)
+                    if (err.details or {}).get("limit") == ORDER_ACTIONS_LIMIT:
+                        self._hold_placements(hint)
+                        placements_held = order_actions > 0
+                    else:
+                        self.limiter.block_for(hint)
             if on_retry_error is not None and attempt > 0:
                 # An earlier attempt may have reached the server after all.
                 recovered = on_retry_error(err)
@@ -237,11 +303,13 @@ class SyncTransport:
                     MAX_SERVER_WAIT_S,
                 )
                 raise err
-            if recover is not None and resp.status_code in _AMBIGUOUS_STATUS:
+            if recover is not None and is_ambiguous_status(resp.status_code):
                 recovered = recover()
                 if recovered is not None:
                     return recovered
             delay = self.policy.delay_for(err, attempt)
+            if resp.status_code == 429 and placements_held:
+                delay = 0.0  # the next attempt waits out the placement hold itself
             logger.debug("cexy: retrying %s %s after %s in %.2fs", op.method, op.path, err.code, delay)
             self._sleep(delay)
             attempt += 1

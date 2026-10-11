@@ -104,6 +104,39 @@ class CancelAllRequest(BaseModel):
     ] = None
 
 
+class CancelBatchItem(BaseModel):
+    """
+    One order to cancel: exactly one of `order_id` and `client_order_id`.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    client_order_id: Annotated[
+        Optional[str],
+        Field(
+            description="Your identifier for it.",
+            max_length=64,
+            pattern="^[A-Za-z0-9_\\-.:]{1,64}$",
+        ),
+    ] = None
+    order_id: Annotated[Optional[str], Field(description="The order's id.")] = None
+
+
+class CancelBatchRequest(BaseModel):
+    """
+    Cancels up to 50 orders, each named by its id or by your own (Phase 0 B2).
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    orders: Annotated[
+        List[CancelBatchItem],
+        Field(description="The orders, 1 to 50, cancelled one after another in this order."),
+    ]
+
+
 class CancelFailureResponse(BaseModel):
     """
     Why one order could not be cancelled.
@@ -1438,6 +1471,13 @@ class ApiKeyResponse(BaseModel):
     key_id: Annotated[str, Field(description="The public key id, sent as `X-API-Key`.")]
     label: Annotated[str, Field(description="Human label.")]
     last_used_at: Annotated[Optional[AwareDatetime], Field(description="When it was last used, if ever.")] = None
+    rate_tier: Annotated[
+        str,
+        Field(
+            description="Its rate-limit tier: `default`, or `mm` for a market maker's key, which only the exchange sets.",
+            examples=["default"],
+        ),
+    ]
     revoked: Annotated[bool, Field(description="Whether it has been revoked.")]
     scopes: Annotated[List[ApiScope], Field(description="Granted scopes.")]
 
@@ -1607,6 +1647,71 @@ class BalanceResponse(BaseModel):
         Field(
             description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
         ),
+    ]
+
+
+class BatchOrderItem(BaseModel):
+    """
+    One order of a batch: an order as for `POST /trading/orders`, without the symbol, and with `client_order_id` required.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    client_order_id: Annotated[
+        str,
+        Field(
+            description="Your own identifier, unique per account. Required: a retry of the batch is answered `ALREADY_EXISTS` for every order it already placed, so nothing is placed twice.",
+            examples=["q-1717171717-001"],
+            max_length=64,
+            pattern="^[A-Za-z0-9_\\-.:]{1,64}$",
+        ),
+    ]
+    price: Annotated[
+        Optional[Decimal],
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ] = None
+    quantity: Annotated[
+        Optional[Decimal],
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ] = None
+    quote_quantity: Annotated[
+        Optional[Decimal],
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ] = None
+    side: OrderSide
+    stop_price: Annotated[
+        Optional[Decimal],
+        Field(
+            description='Exact decimal amount, serialized as a string to avoid floating-point precision loss. Example: "1.50000000".'
+        ),
+    ] = None
+    time_in_force: Optional[TimeInForce] = None
+    trigger_direction: Optional[TriggerDirection] = None
+    type: OrderType
+
+
+class BatchOrderRequest(BaseModel):
+    """
+    Places up to 20 orders in one market (Phase 0 B2).
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    orders: Annotated[
+        List[BatchOrderItem],
+        Field(description="The orders, 1 to 20, placed one after another in this order."),
+    ]
+    symbol: Annotated[
+        str,
+        Field(description="The market every order is placed in.", examples=["BTC/USDT"]),
     ]
 
 
@@ -2148,7 +2253,14 @@ class PlaceOrderRequest(BaseModel):
     model_config = ConfigDict(
         extra="allow",
     )
-    client_order_id: Annotated[Optional[str], Field(description="Your own identifier. Unique per account.")] = None
+    client_order_id: Annotated[
+        Optional[str],
+        Field(
+            description="Your own identifier. Unique per account.",
+            max_length=64,
+            pattern="^[A-Za-z0-9_\\-.:]{1,64}$",
+        ),
+    ] = None
     price: Annotated[
         Optional[Decimal],
         Field(
@@ -2294,6 +2406,71 @@ class WithdrawalResponse(BaseModel):
     network: Annotated[str, Field(description="Network code.")]
     status: WithdrawalStatus
     txid: Annotated[Optional[str], Field(description="Transaction hash, once broadcast.")] = None
+
+
+class BatchOrderResult(BaseModel):
+    """
+    One order's outcome in a batch: exactly one of `order` and `error` is set.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    client_order_id: Annotated[str, Field(description="Its `client_order_id`, as sent.")]
+    error: Optional[ErrorBody] = None
+    fills: Annotated[
+        List[FillResponse],
+        Field(description="Fills produced on entry, oldest first; empty when refused."),
+    ]
+    index: Annotated[int, Field(description="Its position in the request, from 0.", ge=0)]
+    order: Optional[OrderResponse] = None
+
+
+class CancelBatchResult(BaseModel):
+    """
+    One entry's outcome in a batch cancel: exactly one of `order` and `error` is set.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    client_order_id: Annotated[Optional[str], Field(description="The client order id, as sent.")] = None
+    error: Optional[ErrorBody] = None
+    index: Annotated[int, Field(description="Its position in the request, from 0.", ge=0)]
+    order: Optional[OrderResponse] = None
+    order_id: Annotated[Optional[str], Field(description="The order id, as sent.")] = None
+
+
+class BatchOrderResponse(BaseModel):
+    """
+    What a batch did: one result per order, in the order sent.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    failed: Annotated[int, Field(description="How many were refused.", ge=0)]
+    placed: Annotated[int, Field(description="How many were accepted.", ge=0)]
+    results: Annotated[
+        List[BatchOrderResult],
+        Field(description="One per order sent, in the same order."),
+    ]
+
+
+class CancelBatchResponse(BaseModel):
+    """
+    What a batch cancel did: one result per entry, in the order sent.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    cancelled: Annotated[int, Field(description="How many were cancelled.", ge=0)]
+    failed: Annotated[int, Field(description="How many were not.", ge=0)]
+    results: Annotated[
+        List[CancelBatchResult],
+        Field(description="One per entry sent, in the same order."),
+    ]
 
 
 # Ids are plain strings: the SDK does not check their format.

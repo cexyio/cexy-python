@@ -141,6 +141,54 @@ asyncio.run(main())
 ```
 
 
+### Batch orders
+
+Place up to 20 orders in one market with one request, or cancel up to 50:
+
+```python
+res = client.trading.place_orders("BTC/USDT", [
+    {"side": "buy", "type": "limit", "price": Decimal("64000"), "quantity": Decimal("0.01")},
+    {"side": "sell", "type": "limit", "price": Decimal("66000"), "quantity": Decimal("0.01")},
+])
+for o in res.results:                      # request order
+    print(o.index, o.client_order_id, o.outcome, o.order_id, o.status, o.error)
+
+client.trading.cancel_orders([{"order_id": "..."}, {"client_order_id": "..."}])
+client.trading.cancel_order_by_client_id("my-id-1")
+```
+
+- Each order is placed (or cancelled) on its own: the batch is **not atomic**, and one refusal does
+  not stop the rest. Each result's `outcome` is `placed` (or `cancelled`), `failed` with `error`,
+  `recovered` or `unknown` (below). The counts on the result are computed from the results.
+- Every order carries a `client_order_id`; one (a UUID) is generated for each order without one.
+  Your own ids must be 1 to 64 characters of `A-Z a-z 0-9 _ - . :` (not `.` or `..`), distinct
+  within the batch, and unique per account across all markets.
+- **Supply and save your own `client_order_id`s before the call if you need to reconcile**
+  (`cexy.new_client_order_id()` makes one). An error raised after the request may have been sent
+  carries `exc.client_order_ids` (every id sent, in request order, generated ones included) and
+  `exc.maybe_placed`, but a cancelled asyncio task or an interrupted program cannot hand them back:
+  ids you saved yourself are the only way to find those orders.
+- **Retries:** the request body is built once; a retry after a timeout resends it unchanged, and the
+  server refuses every id it already placed, so nothing is placed twice. Such an order comes back as
+  `recovered` with its `order_id` and `status`. An item error that names an order (`MARKET_UNAVAILABLE`
+  when the market stopped while matching, or an `INTERNAL` error after the order was stored) is also
+  `recovered`: the order exists. A recovered order counts as placed unless its status is `rejected`,
+  even if it ended `cancelled` with nothing filled: read `status` before acting. A `rejected` status means the server refused it for funds and its
+  id is spent: do not place it again under that id. `unknown` means its state could not be read; it
+  was not placed again. **Reconcile every `unknown` with `order_by_client_id` before placing
+  anything in its place.** A cancel that a retry finds already closed is looked up and comes back as
+  `recovered` with its current status.
+- **When `place_orders` raises:** `exc.maybe_placed` is `False` only when every attempt was a
+  definite refusal (a 400, 403, 404, 429, 501 or 503 with no earlier timeout or 5xx): nothing was
+  placed. It is `True` after a read timeout, a connection lost after sending, any other 5xx (Cloudflare's 520 and 524
+  included) or a 200 the SDK cannot use (`BatchResponseError`): some of the orders may be live, so
+  look each id up before placing them again. A batch larger than the key's whole budget is a 400 with
+  a number in `details["limit"]`: send fewer at a time. The SDK never splits a batch. A 429 is
+  waited out (up to 120 s) and the same body resent.
+- Which network errors count as "may have been sent": Python counts a failed connect as not sent and
+  every other network error as maybe sent. (The TypeScript and Rust SDKs cannot tell a failed connect
+  apart and count every network error as maybe sent.)
+
 ### Market buys by total
 
 A market buy can name a budget, `quote_quantity`, instead of a `quantity`: "spend at most this
@@ -360,6 +408,13 @@ requests from other threads or tasks, plus 0 to 250 ms of jitter so held request
 same instant. A later, shorter hint never shortens a hold. A wait above 120 s fails the request at
 once (it is not retried) and holds the client for 120 s. Why: a key that keeps retrying past its own
 limit counts on its IP address's key-attempt limit, which can lock out other keys on that address.
+
+**Batches and order budgets.** A batch of N orders or cancel entries takes N tokens from the client's
+limiter, as the server counts it. A market maker's key also has an order budget of 50 placements a
+second (per key and per account); cancels never count against it. A 429 whose `details["limit"]` is
+`"order_actions"` holds only **placements** (`place_order`, `place_orders`) for its wait: reads and
+cancels keep going. Set `Client(order_actions_per_second=50)` to keep placements under that budget
+locally instead of being refused (off by default).
 
 ## WebSocket
 

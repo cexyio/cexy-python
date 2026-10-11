@@ -5,6 +5,34 @@ request signing (HMAC) ships; see "Versioning" in README.md.
 
 ## Unreleased
 
+### Added
+- `trading.place_orders(symbol, orders)`: up to 20 orders in one market in one request
+  (`POST /trading/orders/batch`). Not atomic; results in request order, each `placed`, `failed`,
+  `recovered` or `unknown` (`BatchPlaceResult`, `BatchOrderOutcome`). A `client_order_id` is generated
+  for each order without one, before the first attempt; a retry resends the same body. After a lost
+  answer, an order the earlier attempt placed is reported `recovered` from the server's
+  `ALREADY_EXISTS` details (looked up once by client order id if they are missing), never placed again.
+- `trading.cancel_orders(orders)`: up to 50 cancels by `order_id` or `client_order_id`
+  (`POST /trading/orders/cancel-batch`, `BatchCancelResult`, `CancelEntryOutcome`).
+- `trading.cancel_order_by_client_id(client_order_id)` (`DELETE /trading/orders/by-client-id/{id}`).
+- `Client(order_actions_per_second=...)`: an optional client-side budget for placements.
+- `ApiKeyResponse.rate_tier` (`default` or `mm`).
+- Shared conformance cases: `trading/batch_orders.json`.
+
+- An error raised by `place_orders` (or `place_order`) after the request may have been sent carries
+  `client_order_ids` (in request order, generated ones included) and `maybe_placed`.
+  `cexy.new_client_order_id()` makes ids to save before the call. `BatchResponseError`: a 200 without
+  data, undecodable, or whose results do not match the request.
+
+### Changed
+- A batch takes one limiter token per order or entry.
+- Every 5xx except 501 and 503 (Cloudflare 520 and 524 included) counts as "the server may have
+  acted" for recovery.
+- A batch item error that names an order (`details.order_id`, e.g. `MARKET_UNAVAILABLE`) is reported
+  `recovered` on any attempt; an item `INTERNAL` error is looked up once by client order id.
+- An `order_actions` 429 on a placement waits once (the placement hold), not twice.
+- A 429 with `details.limit` `order_actions` holds only placements for its wait, not the whole client.
+
 ## 0.1.0.dev15 (2026-10-09)
 
 ### Changed
