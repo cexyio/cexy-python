@@ -62,8 +62,11 @@ info:
     ## After a reconnect, or any `*.resync`
 
 
-    Refetch over REST, then resubscribe. Futures market channels send no snapshot on subscribe, and `futures.resync`
-    may arrive at any time.'
+    Refetch over REST, then resubscribe. On subscribe, `futures.status` sends the current state (a frame
+    with no `sequence`), and `futures.orderbook:{coin}` sends the cached book, when there is one, as a
+    snapshot: `snapshot: true` and the channel''s current `sequence` (it may equal the last one seen before
+    a reconnect). Replace the book with it and continue the gap check from its sequence. Trades, candles
+    and mids send no snapshot. `futures.resync` may arrive at any time.'
   license:
     name: MIT
     url: https://opensource.org/license/mit
@@ -257,9 +260,10 @@ channels:
   futures.orderbook:
     address: futures.orderbook:{coin}
     title: '`futures.orderbook:{coin}`'
-    description: 'A futures market''s book, in full, replaced on every change. There is no snapshot on
-      subscribe: fetch `GET /futures/markets/{coin}/orderbook` for one. A side deeper than 100 levels
-      is not sent.
+    description: 'A futures market''s book, in full, replaced on every change. On subscribe the cached
+      book, when there is one, is sent first as a snapshot: `snapshot: true` and the channel''s current
+      `sequence`; replace the book and continue the gap check from that sequence. A side deeper than 100
+      levels is cut to its best 100.
 
 
       Public: no sign-in needed.'
@@ -619,8 +623,16 @@ components:
       summary: Subscribes to channels.
       payload:
         type: object
-        description: Subscribes to channels. Each refused channel gets its own `error` (with this request's
-          `id`); the rest are subscribed, and listed in one `subscribed`.
+        description: 'Subscribes to channels. Each refused channel gets its own `error` (with this request''s
+          `id`, and `channel` naming it), in request order; the rest are subscribed, and listed in one
+          `subscribed`, after those errors. At the connection''s cap, one `error` is sent and the rest
+          of the request is not processed. A channel already held is listed again, even at the cap. No
+          event on a newly subscribed channel comes before `subscribed`. Right after it, to this connection
+          only: `futures.status` sends the current state (no `sequence`), and `futures.orderbook:{coin}`
+          sends the cached book, when there is one, as a snapshot (`snapshot: true`). That frame is the
+          first event on the channel after `subscribed`, before any live event; a snapshot''s `sequence`
+          is the channel''s sequence at the moment it was taken, and every live event after it has a higher
+          one.'
         required:
         - channels
         - op
@@ -705,7 +717,9 @@ components:
           heartbeat_interval_seconds:
             type: integer
             format: int64
-            description: Seconds of silence after which the server closes the connection.
+            description: How often, in seconds, the server sends an unprompted `pong`, and how often a
+              client should send `ping`. The server closes a connection it has heard nothing from for
+              90 seconds (three intervals); its own `pong` frames do not count.
             minimum: 0
           max_subscriptions:
             type: integer
@@ -848,8 +862,8 @@ components:
 
         | `NOT_FOUND` | A market channel naming a market that is not listed. |
 
-        | `CONCURRENT_MODIFICATION` | The connection fell behind and frames were dropped; the message
-        says how many. Fetch fresh snapshots over REST. |
+        | `CONCURRENT_MODIFICATION` | The connection fell behind on `channel` and frames were dropped;
+        the message says how many. Fetch fresh snapshots over REST. |
 
         | `RATE_LIMITED` | Too many `auth_key` attempts from the client''s address. Carries the next challenge.
         |
@@ -864,7 +878,7 @@ components:
 
         | (as given) | A futures channel whose data cannot be served: `NOT_FOUND` when futures data or
         the caller''s futures account is not available, `RATE_LIMITED` when new upstream feeds or account
-        updates are paused for a while. |'
+        updates are paused for a while; then `details.retry_after_seconds` says when to try again. |'
       payload:
         type: object
         description: 'A request failed, or the connection is about to close. `code` is from the same vocabulary
@@ -891,8 +905,8 @@ components:
 
           | `NOT_FOUND` | A market channel naming a market that is not listed. |
 
-          | `CONCURRENT_MODIFICATION` | The connection fell behind and frames were dropped; the message
-          says how many. Fetch fresh snapshots over REST. |
+          | `CONCURRENT_MODIFICATION` | The connection fell behind on `channel` and frames were dropped;
+          the message says how many. Fetch fresh snapshots over REST. |
 
           | `RATE_LIMITED` | Too many `auth_key` attempts from the client''s address. Carries the next
           challenge. |
@@ -907,7 +921,8 @@ components:
 
           | (as given) | A futures channel whose data cannot be served: `NOT_FOUND` when futures data
           or the caller''s futures account is not available, `RATE_LIMITED` when new upstream feeds or
-          account updates are paused for a while. |'
+          account updates are paused for a while; then `details.retry_after_seconds` says when to try
+          again. |'
         required:
         - code
         - message
@@ -916,8 +931,19 @@ components:
           challenge:
             type: string
             description: 'After a failed `auth_key`: the challenge for the next attempt.'
+          channel:
+            type: string
+            description: 'The channel it concerns: on a refused subscription, the channel as the client
+              sent it (or its canonical name once parsed); on `CONCURRENT_MODIFICATION`, the channel that
+              fell behind. Absent on errors about the connection.'
           code:
             $ref: '#/components/schemas/ErrorCode'
+          details:
+            type: object
+            description: 'Structured context, as REST errors carry it: `retry_after_seconds` when the
+              refusal says when to retry.'
+            additionalProperties:
+              $ref: '#/components/schemas/DetailValue'
           id:
             type: string
             description: Echo of the request id.
@@ -1672,6 +1698,13 @@ components:
             type: integer
             minimum: 1
             description: Rises by one per frame on this channel.
+          snapshot:
+            const: true
+            description: Present (`true`) only on the snapshot sent to one connection when it subscribes
+              and a book is cached. It carries the channel's current `sequence`, not a new one, so after
+              a reconnect it may equal the last sequence the client saw. The client replaces its book
+              with it and continues the gap check from its `sequence`; no frame at or below that sequence
+              follows on this subscription. Its `as_of` is when the server received the book.
           timestamp:
             type: string
             format: date-time
@@ -1772,7 +1805,6 @@ components:
         required:
         - type
         - channel
-        - sequence
         - timestamp
         - data
         properties:
@@ -1788,7 +1820,9 @@ components:
           sequence:
             type: integer
             minimum: 1
-            description: Rises by one per frame on this channel.
+            description: 'Rises by one per frame on this channel. Absent on the frame sent to a connection
+              when it subscribes (the current state): that frame is not channel data, and a gap check
+              skips it.'
           timestamp:
             type: string
             format: date-time
@@ -2053,6 +2087,17 @@ components:
       - below_minimum
       - under_review
       - internal
+    DetailValue:
+      oneOf:
+      - type: string
+        description: Text.
+      - type: integer
+        format: int64
+        description: Whole number.
+      - type: boolean
+        description: Boolean flag.
+      description: A structured value attached to an error. Kept deliberately narrow so that no accidental
+        secret (a token, a key, a full document) can be attached.
     EmptyData:
       type: object
       description: 'Nothing: the `*.resync` notices carry no data. Refetch over REST and continue.'

@@ -815,63 +815,65 @@ class Futures(_Resource):
     503. Without a futures account the account reads answer ``has_account=False``.
     """
 
-    @operation("markets")
+    @operation("futures_markets")
     def markets(self) -> m.FuturesMarketsResponse:
         """Every listed futures market and its current figures (public)."""
-        payload = self._t.request("markets")
+        payload = self._t.request("futures_markets")
         return m.FuturesMarketsResponse.model_validate(_data(payload))
 
-    @operation("market")
+    @operation("futures_market")
     def market(self, coin: str) -> m.FuturesMarketResponse:
         """One futures market, e.g. ``"BTC"`` (public)."""
-        payload = self._t.request("market", path={"coin": coin})
+        payload = self._t.request("futures_market", path={"coin": coin})
         return m.FuturesMarketResponse.model_validate(_data(payload))
 
-    @operation("orderbook")
+    @operation("futures_orderbook")
     def order_book(self, coin: str, depth: Optional[int] = None) -> m.FuturesBookResponse:
         """The book, up to 20 levels a side (public)."""
-        payload = self._t.request("orderbook", path={"coin": coin}, query={"depth": depth})
+        payload = self._t.request("futures_orderbook", path={"coin": coin}, query={"depth": depth})
         return m.FuturesBookResponse.model_validate(_data(payload))
 
-    @operation("candles")
+    @operation("futures_candles")
     def candles(self, coin: str, interval: str, *, before: Optional[int] = None) -> m.FuturesCandlesResponse:
         """500 candles (public): the latest, or the window holding ``before`` (epoch milliseconds)."""
-        payload = self._t.request("candles", path={"coin": coin}, query={"interval": interval, "before": before})
+        payload = self._t.request(
+            "futures_candles", path={"coin": coin}, query={"interval": interval, "before": before}
+        )
         return m.FuturesCandlesResponse.model_validate(_data(payload))
 
-    @operation("trades")
+    @operation("futures_trades")
     def trades(self, coin: str, *, limit: Optional[int] = None) -> m.FuturesTradesResponse:
         """Recent public trades, at most 100 (public)."""
-        payload = self._t.request("trades", path={"coin": coin}, query={"limit": limit})
+        payload = self._t.request("futures_trades", path={"coin": coin}, query={"limit": limit})
         return m.FuturesTradesResponse.model_validate(_data(payload))
 
-    @operation("positions")
+    @operation("futures_positions")
     def positions(self) -> m.FuturesPositionsResponse:
         """The margin summary and open positions (``read``). ``has_account`` is False, with no
         positions, when the account has no futures account."""
-        payload = self._t.request("positions")
+        payload = self._t.request("futures_positions")
         return m.FuturesPositionsResponse.model_validate(_data(payload))
 
-    @operation("open_orders")
+    @operation("futures_open_orders")
     def open_orders(self) -> m.FuturesOpenOrdersResponse:
         """The account's open futures orders (``read``)."""
-        payload = self._t.request("open_orders")
+        payload = self._t.request("futures_open_orders")
         return m.FuturesOpenOrdersResponse.model_validate(_data(payload))
 
-    @operation("fills")
+    @operation("futures_fills")
     def fills(self, *, cursor: Optional[str] = None) -> m.FuturesFillsResponse:
         """One page of fills, newest first, 100 a page, 30 days back (``read``).
 
         A page may be short, even empty, and still carry a ``next_cursor``: keep paging until it
         is None, passing it back exactly as given. :meth:`iter_fills` does this for you."""
-        payload = self._t.request("fills", query={"cursor": cursor})
+        payload = self._t.request("futures_fills", query={"cursor": cursor})
         return m.FuturesFillsResponse.model_validate(_data(payload))
 
-    @operation("funding")
+    @operation("futures_funding")
     def funding(self, *, cursor: Optional[str] = None) -> m.FuturesFundingResponse:
         """One page of funding payments, paged like :meth:`fills` (``read``).
         :meth:`iter_funding` walks every page."""
-        payload = self._t.request("funding", query={"cursor": cursor})
+        payload = self._t.request("futures_funding", query={"cursor": cursor})
         return m.FuturesFundingResponse.model_validate(_data(payload))
 
     def iter_fills(self, *, max_busy_retries: int = 3) -> Iterator[m.FuturesFill]:

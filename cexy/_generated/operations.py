@@ -74,12 +74,18 @@ OPERATIONS = {
         "export_withdrawals", "GET", "/api/v1/exports/withdrawals", "api_key", "read", (), ("from", "to"), False
     ),
     "list_fee_schedules": Operation("list_fee_schedules", "GET", "/api/v1/fees", "none", "-", (), (), False),
-    "fills": Operation("fills", "GET", "/api/v1/futures/fills", "api_key", "read", (), ("cursor",), False),
-    "funding": Operation("funding", "GET", "/api/v1/futures/funding", "api_key", "read", (), ("cursor",), False),
-    "markets": Operation("markets", "GET", "/api/v1/futures/markets", "none", "-", (), (), False),
-    "market": Operation("market", "GET", "/api/v1/futures/markets/{coin}", "none", "-", ("coin",), (), False),
-    "candles": Operation(
-        "candles",
+    "futures_fills": Operation(
+        "futures_fills", "GET", "/api/v1/futures/fills", "api_key", "read", (), ("cursor",), False
+    ),
+    "futures_funding": Operation(
+        "futures_funding", "GET", "/api/v1/futures/funding", "api_key", "read", (), ("cursor",), False
+    ),
+    "futures_markets": Operation("futures_markets", "GET", "/api/v1/futures/markets", "none", "-", (), (), False),
+    "futures_market": Operation(
+        "futures_market", "GET", "/api/v1/futures/markets/{coin}", "none", "-", ("coin",), (), False
+    ),
+    "futures_candles": Operation(
+        "futures_candles",
         "GET",
         "/api/v1/futures/markets/{coin}/candles",
         "none",
@@ -88,14 +94,25 @@ OPERATIONS = {
         ("interval", "before"),
         False,
     ),
-    "orderbook": Operation(
-        "orderbook", "GET", "/api/v1/futures/markets/{coin}/orderbook", "none", "-", ("coin",), ("depth",), False
+    "futures_orderbook": Operation(
+        "futures_orderbook",
+        "GET",
+        "/api/v1/futures/markets/{coin}/orderbook",
+        "none",
+        "-",
+        ("coin",),
+        ("depth",),
+        False,
     ),
-    "trades": Operation(
-        "trades", "GET", "/api/v1/futures/markets/{coin}/trades", "none", "-", ("coin",), ("limit",), False
+    "futures_trades": Operation(
+        "futures_trades", "GET", "/api/v1/futures/markets/{coin}/trades", "none", "-", ("coin",), ("limit",), False
     ),
-    "open_orders": Operation("open_orders", "GET", "/api/v1/futures/orders", "api_key", "read", (), (), False),
-    "positions": Operation("positions", "GET", "/api/v1/futures/positions", "api_key", "read", (), (), False),
+    "futures_open_orders": Operation(
+        "futures_open_orders", "GET", "/api/v1/futures/orders", "api_key", "read", (), (), False
+    ),
+    "futures_positions": Operation(
+        "futures_positions", "GET", "/api/v1/futures/positions", "api_key", "read", (), (), False
+    ),
     "list_markets": Operation("list_markets", "GET", "/api/v1/markets", "none", "-", (), (), False),
     "get_market": Operation("get_market", "GET", "/api/v1/markets/{symbol}", "none", "-", ("symbol",), (), False),
     "get_candles": Operation(

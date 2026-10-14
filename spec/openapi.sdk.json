@@ -1018,7 +1018,7 @@
           "futures"
         ],
         "summary": "The caller's futures fills, newest first, 30 days back.",
-        "operationId": "fills",
+        "operationId": "futures_fills",
         "parameters": [
           {
             "name": "cursor",
@@ -1088,7 +1088,7 @@
           "futures"
         ],
         "summary": "The caller's futures funding payments, newest first, 30 days back.",
-        "operationId": "funding",
+        "operationId": "futures_funding",
         "parameters": [
           {
             "name": "cursor",
@@ -1159,7 +1159,7 @@
         ],
         "summary": "Every listed futures market, with its current figures.",
         "description": "Public. Read from the futures provider at most every few seconds for everyone; `stale` says when what is served is older than it should be.",
-        "operationId": "markets",
+        "operationId": "futures_markets",
         "responses": {
           "200": {
             "description": "The markets",
@@ -1200,7 +1200,7 @@
           "futures"
         ],
         "summary": "One futures market.",
-        "operationId": "market",
+        "operationId": "futures_market",
         "parameters": [
           {
             "name": "coin",
@@ -1262,7 +1262,7 @@
           "futures"
         ],
         "summary": "A futures market's candles, 500 at a time in fixed windows.",
-        "operationId": "candles",
+        "operationId": "futures_candles",
         "parameters": [
           {
             "name": "coin",
@@ -1365,7 +1365,7 @@
         ],
         "summary": "A futures market's book.",
         "description": "From the live feed: the first request for a market opens it, and it stays open a minute after the last reader. `stale` is the feed's health, not the book's age; a quiet book can be unchanged and current.",
-        "operationId": "orderbook",
+        "operationId": "futures_orderbook",
         "parameters": [
           {
             "name": "coin",
@@ -1449,7 +1449,7 @@
         ],
         "summary": "A futures market's recent public trades: side, price, size and time only.",
         "description": "From the live feed's last 100. The first request for a market opens the feed, so it may return few or none, marked `stale`.",
-        "operationId": "trades",
+        "operationId": "futures_trades",
         "parameters": [
           {
             "name": "coin",
@@ -1522,7 +1522,7 @@
           "futures"
         ],
         "summary": "The caller's open futures orders.",
-        "operationId": "open_orders",
+        "operationId": "futures_open_orders",
         "responses": {
           "200": {
             "description": "Open orders",
@@ -1580,7 +1580,7 @@
           "futures"
         ],
         "summary": "The caller's futures margin summary and open positions.",
-        "operationId": "positions",
+        "operationId": "futures_positions",
         "responses": {
           "200": {
             "description": "Positions, or `has_account: false`",
