@@ -5,6 +5,11 @@ request signing (HMAC) ships; see "Versioning" in README.md.
 
 ## Unreleased
 
+### Changed
+- Spec sync with the server's futures release (2026-10-14): the 9 futures operation ids now
+  start with `futures_` (`futures_fills`, `futures_open_orders`, ...). Method names, wire
+  requests and responses are unchanged. The ids appear only in the private operation table.
+
 ## 0.1.0.dev16 (2026-10-11)
 
 ### Added
