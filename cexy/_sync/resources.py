@@ -966,9 +966,12 @@ def _is_busy_503(err: CexyApiError) -> bool:
 
 def _busy_hint(err: CexyApiError) -> Optional[float]:
     """The wait a busy 503 asks for: the Retry-After header, else ``details.retry_after_seconds``;
-    unusable hints are skipped."""
+    unusable and zero hints are skipped (a busy provider never gets an immediate retry)."""
     header = retry_after_seconds(err.headers, {})
-    return header if header is not None else retry_after_seconds({}, err.details)
+    if header:
+        return header
+    details = retry_after_seconds({}, err.details)
+    return details if details else None
 
 
 def _stalled(path: str, busy: int, cursor: Optional[str]) -> PagingStalledError:
