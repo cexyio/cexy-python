@@ -38,6 +38,7 @@ import inspect
 import itertools
 import json
 import logging
+import math
 import random
 import re
 import warnings
@@ -53,6 +54,7 @@ from typing import (
     Iterable,
     List,
     Optional,
+    Sequence,
     Set,
     Tuple,
     Union,
@@ -64,7 +66,7 @@ from websockets.exceptions import ConnectionClosed, WebSocketException
 from cexy._async.client import AsyncClient
 from cexy._common import USER_AGENT, check_scheme
 from cexy._generated import models as m
-from cexy.auth import REDACTED, HmacAuth, redact_text
+from cexy.auth import REDACTED, HmacAuth, redact_text, redact_value
 from cexy.errors import CexyError
 
 logger = logging.getLogger("cexy.ws")
@@ -145,12 +147,51 @@ _warned_versions: Set[int] = set()
 
 
 class WebSocketError(CexyError):
-    """A WebSocket protocol error, or an ``error`` frame answering one of our requests."""
+    """A WebSocket protocol error, or an ``error`` frame answering one of our requests.
 
-    def __init__(self, code: str, message: str = "") -> None:
+    From an ``error`` frame, ``channel`` is the channel the refusal concerns, ``details`` the
+    frame's ``details`` object (empty when absent or not an object) and ``retry_after`` the
+    seconds from ``details.retry_after_seconds`` (None unless a non-negative number). Local
+    errors leave all three empty."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str = "",
+        *,
+        channel: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+        retry_after: Optional[float] = None,
+    ) -> None:
         super().__init__(f"{code}: {message}" if message else code)
         self.code = code
         self.message = message
+        self.channel = channel
+        self.details: Dict[str, Any] = details if details is not None else {}
+        self.retry_after = retry_after
+
+    @classmethod
+    def from_frame(cls, frame: Dict[str, Any], message: str, secrets: Sequence[str] = ()) -> WebSocketError:
+        """The error for a server ``error`` frame; ``message`` is already redacted."""
+        channel = frame.get("channel")
+        raw = frame.get("details")
+        details = redact_value(raw, secrets) if isinstance(raw, dict) else {}
+        hint = details.get("retry_after_seconds")
+        retry_after: Optional[float] = None
+        if isinstance(hint, (int, float)) and not isinstance(hint, bool):
+            try:
+                seconds = float(hint)
+            except OverflowError:
+                seconds = math.inf
+            if math.isfinite(seconds) and seconds >= 0:
+                retry_after = seconds
+        return cls(
+            str(frame.get("code")),
+            message,
+            channel=channel if isinstance(channel, str) else None,
+            details=details,
+            retry_after=retry_after,
+        )
 
 
 @dataclass
@@ -758,7 +799,7 @@ class WebSocketClient:
         if rtype == "error":
             # The token of this request too: a refused token is already forgotten here.
             secrets = tuple(t for t in (self._token, msg.get("token")) if t)
-            raise WebSocketError(str(reply.get("code")), redact_text(str(reply.get("message") or ""), secrets))
+            raise WebSocketError.from_frame(reply, redact_text(str(reply.get("message") or ""), secrets), secrets)
         if rtype != expect:
             raise WebSocketError("PROTOCOL", f"expected {expect!r} for {msg['op']}, got {rtype!r}")
         return reply
@@ -1092,7 +1133,7 @@ class WebSocketClient:
             if ftype == "error":
                 secrets = (self._token,) if self._token else ()
                 message = redact_text(str(frame.get("message") or ""), secrets)
-                sub.errors.append(WebSocketError(str(frame.get("code")), message))
+                sub.errors.append(WebSocketError.from_frame(frame, message, secrets))
                 if len(sub.errors) >= len(sub.channels) and sub.fut is not None and not sub.fut.done():
                     sub.fut.set_result(None)  # every channel refused: no ack follows
                 return

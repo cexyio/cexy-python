@@ -35,6 +35,7 @@ from cexy._common import AUTO
 from cexy._decimal import DecimalLike, to_wire, to_wire_opt
 from cexy._generated import models as m
 from cexy._opmap import operation
+from cexy._retry import MAX_SERVER_WAIT_S
 from cexy.errors import (
     CexyApiError,
     CexyConnectionError,
@@ -43,6 +44,7 @@ from cexy.errors import (
     PagingCursorRepeatedError,
     PagingStalledError,
     RateLimitError,
+    retry_after_seconds,
 )
 
 DateLike = Union[datetime, str]
@@ -816,7 +818,8 @@ class AsyncFutures(_Resource):
     For books and trades ``stale`` is the live feed's health, not the data's age. When nothing
     usable is cached the server answers 503 ``SERVICE_UNAVAILABLE`` (retryable,
     ``details.reason`` ``futures_data_unavailable``, with ``Retry-After``), retried like any
-    503. Without a futures account the account reads answer ``has_account=False``.
+    503 (except inside :meth:`iter_fills` / :meth:`iter_funding`, which handle it as a busy
+    answer). Without a futures account the account reads answer ``has_account=False``.
     """
 
     @operation("futures_markets")
@@ -885,15 +888,22 @@ class AsyncFutures(_Resource):
         futures/history_paging.json).
 
         The first request sends no cursor; each ``next_cursor`` is sent back verbatim until it is
-        None. A short or empty page with a new cursor is normal. An EMPTY page whose
-        ``next_cursor`` equals the cursor just sent means the provider is busy: wait (the
-        transport's backoff) and ask for the same cursor again, at most ``max_busy_retries`` times
-        in a row, then raise :class:`~cexy.PagingStalledError` (``PAGING_STALLED``, retryable).
-        ``max_busy_retries`` is independent of the client's ``max_retries`` (request retries), so
-        a client with retries disabled still rides out a busy provider. A page WITH rows whose
-        ``next_cursor`` equals the cursor just sent is a server fault: its rows are yielded, then
-        :class:`~cexy.PagingCursorRepeatedError` (``PAGING_CURSOR_REPEATED``, not retryable) is
-        raised. After either error the rows already yielded are not the complete history.
+        None. A short or empty page with a new cursor is normal. A BUSY answer means the provider
+        cannot serve the page right now: an EMPTY page whose ``next_cursor`` equals the cursor just
+        sent, or a 503 with ``details.reason`` ``futures_data_unavailable`` (on any request, the
+        first included). Wait and ask for the same cursor again, at most ``max_busy_retries`` times
+        in a row (both kinds share the count; a page that advances resets it), then raise
+        :class:`~cexy.PagingStalledError` (``PAGING_STALLED``, retryable; after a busy 503 its
+        ``__cause__`` is that 503). The wait is the 503's ``Retry-After`` header, else
+        ``details.retry_after_seconds`` (exact, no jitter; a hint over 120 s raises the 503 at
+        once), else the transport's backoff. The transport does not retry a busy 503 here, so
+        ``max_busy_retries`` is independent of the client's ``max_retries`` and a client with
+        retries disabled still rides out a busy provider. Any other retryable error (a 503
+        without that reason, 502, 429) is retried by the transport as usual. A page WITH rows
+        whose ``next_cursor`` equals the cursor just sent is a server fault: its rows are
+        yielded, then :class:`~cexy.PagingCursorRepeatedError` (``PAGING_CURSOR_REPEATED``, not
+        retryable) is raised. After either error the rows already yielded are not the complete
+        history.
         ``has_account`` False ends with no rows.
         """
         async for row in self._history("fills", max_busy_retries):
@@ -913,22 +923,32 @@ class AsyncFutures(_Resource):
         busy = 0
         rows: List[Any]
         while True:
+            try:
+                # The helper handles the busy 503 itself: the transport must not retry it.
+                payload = await self._t.request(f"futures_{kind}", query={"cursor": cursor}, no_retry=_is_busy_503)
+            except CexyApiError as err:
+                if not _is_busy_503(err):
+                    raise
+                if busy >= max_busy_retries:
+                    raise _stalled(path, busy, cursor) from err
+                hint = _busy_hint(err)
+                if hint is not None and hint > MAX_SERVER_WAIT_S:
+                    raise  # fails at once, like any request
+                await self._t._sleep(self._t.policy.backoff(busy) if hint is None else hint)
+                busy += 1
+                continue
             if kind == "fills":
-                fills = await self.fills(cursor=cursor)
+                fills = m.FuturesFillsResponse.model_validate(_data(payload))
                 has_account, rows, next_cursor = fills.has_account, list(fills.fills), fills.next_cursor
             else:
-                funding = await self.funding(cursor=cursor)
+                funding = m.FuturesFundingResponse.model_validate(_data(payload))
                 has_account, rows, next_cursor = funding.has_account, list(funding.funding), funding.next_cursor
             if not has_account:
                 return
             repeated = cursor is not None and next_cursor == cursor
             if repeated and not rows:
                 if busy >= max_busy_retries:
-                    raise PagingStalledError(
-                        f"{path}: the provider stayed busy; the same page came back empty {busy + 1} times in a row",
-                        cursor=next_cursor or "",
-                        retries=busy,
-                    )
+                    raise _stalled(path, busy, next_cursor)
                 await self._t._sleep(self._t.policy.backoff(busy))
                 busy += 1
                 continue
@@ -942,6 +962,28 @@ class AsyncFutures(_Resource):
             if next_cursor is None:
                 return
             cursor = next_cursor
+
+
+def _is_busy_503(err: CexyApiError) -> bool:
+    """The futures provider cannot serve the page right now (503, ``details.reason``
+    ``futures_data_unavailable``)."""
+    details = err.details
+    return err.status == 503 and isinstance(details, Mapping) and details.get("reason") == "futures_data_unavailable"
+
+
+def _busy_hint(err: CexyApiError) -> Optional[float]:
+    """The wait a busy 503 asks for: the Retry-After header, else ``details.retry_after_seconds``;
+    unusable hints are skipped."""
+    header = retry_after_seconds(err.headers, {})
+    return header if header is not None else retry_after_seconds({}, err.details)
+
+
+def _stalled(path: str, busy: int, cursor: Optional[str]) -> PagingStalledError:
+    return PagingStalledError(
+        f"{path}: the provider stayed busy; {busy + 1} busy answers in a row",
+        cursor=cursor or "",
+        retries=busy,
+    )
 
 
 def _enum_value(value: Any) -> Any:

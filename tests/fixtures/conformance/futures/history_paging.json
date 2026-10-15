@@ -1,5 +1,5 @@
 {
-  "description": "Futures account history paging (GET /api/v1/futures/fills and /api/v1/futures/funding), for an SDK's iterate-all helper. Rules: (1) the cursor is opaque text, sent back exactly as received (percent-encoded per RFC 3986 in the query; the server decodes it to the same text); (2) a page may be short, even empty, and still carry a next_cursor: keep paging until next_cursor is null; (3) an EMPTY page whose next_cursor equals the cursor just sent means the provider is busy: wait (the SDK's normal backoff) and request the same cursor again, at most max_busy_retries times (default 3) in a row; this is a setting of its own, independent of the client's request retry count (a client with retries disabled must still ride out a busy provider), then fail with a retryable error (code PAGING_STALLED, a local error) without returning a partial result as complete; (4) a NON-empty page whose next_cursor equals the cursor just sent is a server error: yield its rows, then fail with a local error code PAGING_CURSOR_REPEATED, not retryable (never loop); (5) has_account false ends iteration with no rows; (6) the first request sends no cursor. Each case lists the pages in order: `request_cursor` is what the SDK must send (null = parameter absent), `response` what the server answers. `expect.ids` are the yielded row ids in order. (7) a retryable error mid-paging (e.g. 503 SERVICE_UNAVAILABLE with Retry-After) is retried with the client's normal request-retry policy for the SAME cursor and paging continues; a page entry with `http_status` is an error answer whose body is `response` and whose headers are `headers`. Real cursors look like \"<ms>.<key>\" or a bare \"<ms>\": still opaque. `funding_cases` repeat the rules on GET /api/v1/futures/funding, whose rows have no id: `expect.times` lists the yielded rows' `time`.",
+  "description": "Futures account history paging (GET /api/v1/futures/fills and /api/v1/futures/funding), for an SDK's iterate-all helper. Rules: (1) the cursor is opaque text, sent back exactly as received (percent-encoded per RFC 3986 in the query; the server decodes it to the same text); (2) a page may be short, even empty, and still carry a next_cursor: keep paging until next_cursor is null; (3) a BUSY answer means the provider cannot serve the page right now. It is either an EMPTY page whose next_cursor equals the cursor just sent, or an HTTP 503 whose body has details.reason \"futures_data_unavailable\" (on any request, including the first one, which sends no cursor). On a busy answer: wait, then request the same cursor again (no cursor stays no cursor), at most max_busy_retries times (default 3) in a row; both kinds of busy answer share this one counter, and a page that advances resets it. The wait is the server hint, taken in this order: the Retry-After header (delta-seconds or HTTP-date, as the SDK's transport parses it), then details.retry_after_seconds; a hint that is missing, unparseable or negative is skipped (it never fails the call or busy-loops), and with no usable hint the wait is the SDK's normal backoff. A hinted wait is exact (no jitter); a hint above the SDK's maximum server wait fails at once, as for any request. This budget is a setting of its own, independent of the client's request retry count: the request-retry layer does NOT retry a futures_data_unavailable 503 inside the helper, so a client with retries disabled still rides out a busy provider and the attempts per cursor are at most 1 + max_busy_retries. With max_busy_retries 0 the first busy answer fails at once. When the budget runs out, fail with a retryable error (code PAGING_STALLED, a local error) without returning a partial result as complete; when the last busy answer was a 503, that error is attached as the cause, so its details.reason stays reachable. (4) a NON-empty page whose next_cursor equals the cursor just sent is a server error: yield its rows, then fail with a local error code PAGING_CURSOR_REPEATED, not retryable (never loop); (5) has_account false ends iteration with no rows; (6) the first request sends no cursor. Each case lists the pages in order: `request_cursor` is what the SDK must send (null = parameter absent), `response` what the server answers. `expect.ids` are the yielded row ids in order. (7) any OTHER retryable error mid-paging (e.g. a 503 without details.reason futures_data_unavailable, a 502, a 429) is retried with the client's normal request-retry policy for the SAME cursor and paging continues; a client with retries disabled fails at once; a page entry with `http_status` is an error answer whose body is `response` and whose headers are `headers`. Optional case fields: `client.max_retries` is the client's request retry count (absent = SDK default); `max_busy_retries` overrides the helper's budget for that case (absent = the top-level default). Optional expect fields: `sleep_seconds` lists the exact hinted waits in order; `backoff_sleeps` counts waits that must come from the SDK's normal backoff (no usable hint); `error_cause_reason` is the details.reason of the error attached as the cause of the final error. Real cursors look like \"<ms>.<key>\" or a bare \"<ms>\": still opaque. `funding_cases` repeat the rules on GET /api/v1/futures/funding, whose rows have no id: `expect.times` lists the yielded rows' `time`.",
   "operation": "GET /api/v1/futures/fills",
   "cases": [
     {
@@ -254,7 +254,9 @@
         ],
         "requests": 3,
         "sleeps": 1,
-        "min_sleep_seconds": 2
+        "sleep_seconds": [
+          2
+        ]
       }
     },
     {
@@ -384,6 +386,637 @@
         "requests": 5,
         "sleeps": 3,
         "error_code": "PAGING_STALLED",
+        "error_retryable": true
+      }
+    },
+    {
+      "id": "unavailable_busy_retries_off",
+      "client": {
+        "max_retries": 0
+      },
+      "pages": [
+        {
+          "request_cursor": null,
+          "response": {
+            "has_account": true,
+            "fills": [
+              {
+                "id": "f1",
+                "order_id": "o1",
+                "coin": "BTC",
+                "side": "buy",
+                "price": "60000.0",
+                "size": "0.01",
+                "direction": "Open Long",
+                "closed_pnl": "0",
+                "taker": true,
+                "time": 1790000000300
+              }
+            ],
+            "next_cursor": "c:R1"
+          }
+        },
+        {
+          "request_cursor": "c:R1",
+          "http_status": 503,
+          "headers": {
+            "Retry-After": "5"
+          },
+          "response": {
+            "error": {
+              "code": "SERVICE_UNAVAILABLE",
+              "message": "Futures data is temporarily unavailable.",
+              "retryable": true,
+              "details": {
+                "reason": "futures_data_unavailable"
+              }
+            }
+          }
+        },
+        {
+          "request_cursor": "c:R1",
+          "http_status": 503,
+          "headers": {
+            "Retry-After": "5"
+          },
+          "response": {
+            "error": {
+              "code": "SERVICE_UNAVAILABLE",
+              "message": "Futures data is temporarily unavailable.",
+              "retryable": true,
+              "details": {
+                "reason": "futures_data_unavailable"
+              }
+            }
+          }
+        },
+        {
+          "request_cursor": "c:R1",
+          "response": {
+            "has_account": true,
+            "fills": [
+              {
+                "id": "f2",
+                "order_id": "o2",
+                "coin": "BTC",
+                "side": "buy",
+                "price": "60000.0",
+                "size": "0.01",
+                "direction": "Open Long",
+                "closed_pnl": "0",
+                "taker": true,
+                "time": 1790000000200
+              }
+            ],
+            "next_cursor": null
+          }
+        }
+      ],
+      "expect": {
+        "ids": [
+          "f1",
+          "f2"
+        ],
+        "requests": 4,
+        "sleeps": 2,
+        "sleep_seconds": [
+          5,
+          5
+        ]
+      }
+    },
+    {
+      "id": "unavailable_on_first_page",
+      "client": {
+        "max_retries": 0
+      },
+      "pages": [
+        {
+          "request_cursor": null,
+          "http_status": 503,
+          "headers": {
+            "Retry-After": "5"
+          },
+          "response": {
+            "error": {
+              "code": "SERVICE_UNAVAILABLE",
+              "message": "Futures data is temporarily unavailable.",
+              "retryable": true,
+              "details": {
+                "reason": "futures_data_unavailable"
+              }
+            }
+          }
+        },
+        {
+          "request_cursor": null,
+          "response": {
+            "has_account": true,
+            "fills": [
+              {
+                "id": "f1",
+                "order_id": "o1",
+                "coin": "BTC",
+                "side": "buy",
+                "price": "60000.0",
+                "size": "0.01",
+                "direction": "Open Long",
+                "closed_pnl": "0",
+                "taker": true,
+                "time": 1790000000300
+              }
+            ],
+            "next_cursor": null
+          }
+        }
+      ],
+      "expect": {
+        "ids": [
+          "f1"
+        ],
+        "requests": 2,
+        "sleeps": 1,
+        "sleep_seconds": [
+          5
+        ]
+      }
+    },
+    {
+      "id": "unavailable_busy_gives_up",
+      "client": {
+        "max_retries": 3
+      },
+      "pages": [
+        {
+          "request_cursor": null,
+          "response": {
+            "has_account": true,
+            "fills": [
+              {
+                "id": "f1",
+                "order_id": "o1",
+                "coin": "BTC",
+                "side": "buy",
+                "price": "60000.0",
+                "size": "0.01",
+                "direction": "Open Long",
+                "closed_pnl": "0",
+                "taker": true,
+                "time": 1790000000300
+              }
+            ],
+            "next_cursor": "c:G1"
+          }
+        },
+        {
+          "request_cursor": "c:G1",
+          "http_status": 503,
+          "headers": {
+            "Retry-After": "5"
+          },
+          "response": {
+            "error": {
+              "code": "SERVICE_UNAVAILABLE",
+              "message": "Futures data is temporarily unavailable.",
+              "retryable": true,
+              "details": {
+                "reason": "futures_data_unavailable"
+              }
+            }
+          }
+        },
+        {
+          "request_cursor": "c:G1",
+          "http_status": 503,
+          "headers": {
+            "Retry-After": "5"
+          },
+          "response": {
+            "error": {
+              "code": "SERVICE_UNAVAILABLE",
+              "message": "Futures data is temporarily unavailable.",
+              "retryable": true,
+              "details": {
+                "reason": "futures_data_unavailable"
+              }
+            }
+          }
+        },
+        {
+          "request_cursor": "c:G1",
+          "http_status": 503,
+          "headers": {
+            "Retry-After": "5"
+          },
+          "response": {
+            "error": {
+              "code": "SERVICE_UNAVAILABLE",
+              "message": "Futures data is temporarily unavailable.",
+              "retryable": true,
+              "details": {
+                "reason": "futures_data_unavailable"
+              }
+            }
+          }
+        },
+        {
+          "request_cursor": "c:G1",
+          "http_status": 503,
+          "headers": {
+            "Retry-After": "5"
+          },
+          "response": {
+            "error": {
+              "code": "SERVICE_UNAVAILABLE",
+              "message": "Futures data is temporarily unavailable.",
+              "retryable": true,
+              "details": {
+                "reason": "futures_data_unavailable"
+              }
+            }
+          }
+        }
+      ],
+      "expect": {
+        "ids_before_error": [
+          "f1"
+        ],
+        "requests": 5,
+        "sleeps": 3,
+        "sleep_seconds": [
+          5,
+          5,
+          5
+        ],
+        "error_code": "PAGING_STALLED",
+        "error_retryable": true,
+        "error_cause_reason": "futures_data_unavailable"
+      }
+    },
+    {
+      "id": "busy_and_unavailable_share_budget",
+      "client": {
+        "max_retries": 0
+      },
+      "pages": [
+        {
+          "request_cursor": null,
+          "response": {
+            "has_account": true,
+            "fills": [
+              {
+                "id": "f1",
+                "order_id": "o1",
+                "coin": "BTC",
+                "side": "buy",
+                "price": "60000.0",
+                "size": "0.01",
+                "direction": "Open Long",
+                "closed_pnl": "0",
+                "taker": true,
+                "time": 1790000000300
+              }
+            ],
+            "next_cursor": "c:M1"
+          }
+        },
+        {
+          "request_cursor": "c:M1",
+          "response": {
+            "has_account": true,
+            "fills": [],
+            "next_cursor": "c:M1"
+          }
+        },
+        {
+          "request_cursor": "c:M1",
+          "http_status": 503,
+          "headers": {
+            "Retry-After": "5"
+          },
+          "response": {
+            "error": {
+              "code": "SERVICE_UNAVAILABLE",
+              "message": "Futures data is temporarily unavailable.",
+              "retryable": true,
+              "details": {
+                "reason": "futures_data_unavailable"
+              }
+            }
+          }
+        },
+        {
+          "request_cursor": "c:M1",
+          "response": {
+            "has_account": true,
+            "fills": [],
+            "next_cursor": "c:M1"
+          }
+        },
+        {
+          "request_cursor": "c:M1",
+          "http_status": 503,
+          "headers": {
+            "Retry-After": "5"
+          },
+          "response": {
+            "error": {
+              "code": "SERVICE_UNAVAILABLE",
+              "message": "Futures data is temporarily unavailable.",
+              "retryable": true,
+              "details": {
+                "reason": "futures_data_unavailable"
+              }
+            }
+          }
+        }
+      ],
+      "expect": {
+        "ids_before_error": [
+          "f1"
+        ],
+        "requests": 5,
+        "sleeps": 3,
+        "backoff_sleeps": 2,
+        "sleep_seconds": [
+          5
+        ],
+        "error_code": "PAGING_STALLED",
+        "error_retryable": true,
+        "error_cause_reason": "futures_data_unavailable"
+      }
+    },
+    {
+      "id": "zero_busy_retries_fails_at_once",
+      "max_busy_retries": 0,
+      "pages": [
+        {
+          "request_cursor": null,
+          "response": {
+            "has_account": true,
+            "fills": [
+              {
+                "id": "f1",
+                "order_id": "o1",
+                "coin": "BTC",
+                "side": "buy",
+                "price": "60000.0",
+                "size": "0.01",
+                "direction": "Open Long",
+                "closed_pnl": "0",
+                "taker": true,
+                "time": 1790000000300
+              }
+            ],
+            "next_cursor": "c:Z1"
+          }
+        },
+        {
+          "request_cursor": "c:Z1",
+          "http_status": 503,
+          "headers": {
+            "Retry-After": "5"
+          },
+          "response": {
+            "error": {
+              "code": "SERVICE_UNAVAILABLE",
+              "message": "Futures data is temporarily unavailable.",
+              "retryable": true,
+              "details": {
+                "reason": "futures_data_unavailable"
+              }
+            }
+          }
+        }
+      ],
+      "expect": {
+        "ids_before_error": [
+          "f1"
+        ],
+        "requests": 2,
+        "sleeps": 0,
+        "error_code": "PAGING_STALLED",
+        "error_retryable": true,
+        "error_cause_reason": "futures_data_unavailable"
+      }
+    },
+    {
+      "id": "hint_header_before_details",
+      "client": {
+        "max_retries": 0
+      },
+      "pages": [
+        {
+          "request_cursor": null,
+          "http_status": 503,
+          "headers": {
+            "Retry-After": "5"
+          },
+          "response": {
+            "error": {
+              "code": "SERVICE_UNAVAILABLE",
+              "message": "Futures data is temporarily unavailable.",
+              "retryable": true,
+              "details": {
+                "reason": "futures_data_unavailable",
+                "retry_after_seconds": 9
+              }
+            }
+          }
+        },
+        {
+          "request_cursor": null,
+          "response": {
+            "has_account": true,
+            "fills": [
+              {
+                "id": "f1",
+                "order_id": "o1",
+                "coin": "BTC",
+                "side": "buy",
+                "price": "60000.0",
+                "size": "0.01",
+                "direction": "Open Long",
+                "closed_pnl": "0",
+                "taker": true,
+                "time": 1790000000300
+              }
+            ],
+            "next_cursor": null
+          }
+        }
+      ],
+      "expect": {
+        "ids": [
+          "f1"
+        ],
+        "requests": 2,
+        "sleeps": 1,
+        "sleep_seconds": [
+          5
+        ]
+      }
+    },
+    {
+      "id": "hint_from_details_without_header",
+      "client": {
+        "max_retries": 0
+      },
+      "pages": [
+        {
+          "request_cursor": null,
+          "http_status": 503,
+          "headers": {},
+          "response": {
+            "error": {
+              "code": "SERVICE_UNAVAILABLE",
+              "message": "Futures data is temporarily unavailable.",
+              "retryable": true,
+              "details": {
+                "reason": "futures_data_unavailable",
+                "retry_after_seconds": 7
+              }
+            }
+          }
+        },
+        {
+          "request_cursor": null,
+          "response": {
+            "has_account": true,
+            "fills": [
+              {
+                "id": "f1",
+                "order_id": "o1",
+                "coin": "BTC",
+                "side": "buy",
+                "price": "60000.0",
+                "size": "0.01",
+                "direction": "Open Long",
+                "closed_pnl": "0",
+                "taker": true,
+                "time": 1790000000300
+              }
+            ],
+            "next_cursor": null
+          }
+        }
+      ],
+      "expect": {
+        "ids": [
+          "f1"
+        ],
+        "requests": 2,
+        "sleeps": 1,
+        "sleep_seconds": [
+          7
+        ]
+      }
+    },
+    {
+      "id": "bad_hint_uses_backoff",
+      "client": {
+        "max_retries": 0
+      },
+      "pages": [
+        {
+          "request_cursor": null,
+          "http_status": 503,
+          "headers": {
+            "Retry-After": "soon"
+          },
+          "response": {
+            "error": {
+              "code": "SERVICE_UNAVAILABLE",
+              "message": "Futures data is temporarily unavailable.",
+              "retryable": true,
+              "details": {
+                "reason": "futures_data_unavailable",
+                "retry_after_seconds": "later"
+              }
+            }
+          }
+        },
+        {
+          "request_cursor": null,
+          "response": {
+            "has_account": true,
+            "fills": [
+              {
+                "id": "f1",
+                "order_id": "o1",
+                "coin": "BTC",
+                "side": "buy",
+                "price": "60000.0",
+                "size": "0.01",
+                "direction": "Open Long",
+                "closed_pnl": "0",
+                "taker": true,
+                "time": 1790000000300
+              }
+            ],
+            "next_cursor": null
+          }
+        }
+      ],
+      "expect": {
+        "ids": [
+          "f1"
+        ],
+        "requests": 2,
+        "sleeps": 1,
+        "backoff_sleeps": 1
+      }
+    },
+    {
+      "id": "other_503_uses_request_retries",
+      "client": {
+        "max_retries": 0
+      },
+      "pages": [
+        {
+          "request_cursor": null,
+          "response": {
+            "has_account": true,
+            "fills": [
+              {
+                "id": "f1",
+                "order_id": "o1",
+                "coin": "BTC",
+                "side": "buy",
+                "price": "60000.0",
+                "size": "0.01",
+                "direction": "Open Long",
+                "closed_pnl": "0",
+                "taker": true,
+                "time": 1790000000300
+              }
+            ],
+            "next_cursor": "c:O1"
+          }
+        },
+        {
+          "request_cursor": "c:O1",
+          "http_status": 503,
+          "headers": {
+            "Retry-After": "5"
+          },
+          "response": {
+            "error": {
+              "code": "SERVICE_UNAVAILABLE",
+              "message": "Futures data is temporarily unavailable.",
+              "retryable": true,
+              "details": {}
+            }
+          }
+        }
+      ],
+      "expect": {
+        "ids_before_error": [
+          "f1"
+        ],
+        "requests": 2,
+        "sleeps": 0,
+        "error_code": "SERVICE_UNAVAILABLE",
         "error_retryable": true
       }
     },
@@ -570,6 +1203,125 @@
         ],
         "requests": 3,
         "sleeps": 1
+      }
+    },
+    {
+      "id": "funding_unavailable_busy_retries_off",
+      "client": {
+        "max_retries": 0
+      },
+      "pages": [
+        {
+          "request_cursor": null,
+          "response": {
+            "has_account": true,
+            "funding": [
+              {
+                "coin": "BTC",
+                "amount": "-0.12",
+                "position_size": "0.2",
+                "rate": "0.0000125",
+                "time": 1790000000300
+              }
+            ],
+            "next_cursor": "c:FU"
+          }
+        },
+        {
+          "request_cursor": "c:FU",
+          "http_status": 503,
+          "headers": {
+            "Retry-After": "5"
+          },
+          "response": {
+            "error": {
+              "code": "SERVICE_UNAVAILABLE",
+              "message": "Futures data is temporarily unavailable.",
+              "retryable": true,
+              "details": {
+                "reason": "futures_data_unavailable"
+              }
+            }
+          }
+        },
+        {
+          "request_cursor": "c:FU",
+          "response": {
+            "has_account": true,
+            "funding": [
+              {
+                "coin": "BTC",
+                "amount": "-0.12",
+                "position_size": "0.2",
+                "rate": "0.0000125",
+                "time": 1790000000200
+              }
+            ],
+            "next_cursor": null
+          }
+        }
+      ],
+      "expect": {
+        "times": [
+          1790000000300,
+          1790000000200
+        ],
+        "requests": 3,
+        "sleeps": 1,
+        "sleep_seconds": [
+          5
+        ]
+      }
+    },
+    {
+      "id": "funding_unavailable_on_first_page",
+      "client": {
+        "max_retries": 0
+      },
+      "pages": [
+        {
+          "request_cursor": null,
+          "http_status": 503,
+          "headers": {
+            "Retry-After": "5"
+          },
+          "response": {
+            "error": {
+              "code": "SERVICE_UNAVAILABLE",
+              "message": "Futures data is temporarily unavailable.",
+              "retryable": true,
+              "details": {
+                "reason": "futures_data_unavailable"
+              }
+            }
+          }
+        },
+        {
+          "request_cursor": null,
+          "response": {
+            "has_account": true,
+            "funding": [
+              {
+                "coin": "BTC",
+                "amount": "-0.12",
+                "position_size": "0.2",
+                "rate": "0.0000125",
+                "time": 1790000000300
+              }
+            ],
+            "next_cursor": null
+          }
+        }
+      ],
+      "expect": {
+        "times": [
+          1790000000300
+        ],
+        "requests": 2,
+        "sleeps": 1,
+        "sleep_seconds": [
+          5
+        ]
       }
     },
     {

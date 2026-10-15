@@ -5,7 +5,19 @@ request signing (HMAC) ships; see "Versioning" in README.md.
 
 ## Unreleased
 
+### Added
+- `WebSocketError.channel`, `.details` and `.retry_after` (seconds), read from a server `error`
+  frame's `channel` and `details` (`details.retry_after_seconds`). Empty (`None`, `{}`, `None`) when
+  the frame lacks them or they are malformed, and on local errors. No retry behaviour changes.
+
 ### Changed
+- `futures.iter_fills()` / `iter_funding()`: a 503 with `details.reason` `futures_data_unavailable`
+  is a busy answer on any request (the first included). It shares the `max_busy_retries` count with
+  the empty same-cursor page and is not retried by the transport inside the helper, so
+  `max_retries=0` still rides it out. The wait is `Retry-After`, else `details.retry_after_seconds`
+  (exact, no jitter), else backoff. A long provider outage now ends iteration with `PAGING_STALLED`
+  (the 503 as `__cause__`) instead of `SERVICE_UNAVAILABLE`. Other retryable errors keep the
+  normal request retries.
 - Spec sync with the server's futures release (2026-10-14): the 9 futures operation ids now
   start with `futures_` (`futures_fills`, `futures_open_orders`, ...). Method names, wire
   requests and responses are unchanged. The ids appear only in the private operation table.
