@@ -5,6 +5,8 @@ request signing (HMAC) ships; see "Versioning" in README.md.
 
 ## Unreleased
 
+## 0.1.0.dev17 (2026-10-15)
+
 ### Added
 - `WebSocketError.channel`, `.details` and `.retry_after` (seconds), read from a server `error`
   frame's `channel` and `details` (`details.retry_after_seconds`). Empty (`None`, `{}`, `None`) when
@@ -21,6 +23,7 @@ request signing (HMAC) ships; see "Versioning" in README.md.
 - Spec sync with the server's futures release (2026-10-14): the 9 futures operation ids now
   start with `futures_` (`futures_fills`, `futures_open_orders`, ...). Method names, wire
   requests and responses are unchanged. The ids appear only in the private operation table.
+- Built against cexy-api-spec `0bd25ad` (futures busy 503 paging, WS error `channel`/`details`).
 
 ## 0.1.0.dev16 (2026-10-11)
 
