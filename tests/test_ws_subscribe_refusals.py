@@ -312,3 +312,51 @@ async def test_subscribe_refusals_concurrent(server: FuturesServer, case: Dict[s
             exp = case["expect"][name]
             assert got == {"added": exp["added"], "refused": exp["refused"]}, name
             assert failed is exp["fails"], name
+
+
+async def test_error_frame_channel_details_and_retry_after(server: FuturesServer) -> None:
+    err = {
+        "type": "error",
+        "code": "RATE_LIMITED",
+        "message": "m",
+        "channel": "futures.orderbook:NOPE",
+        "details": {"retry_after_seconds": 60},
+    }
+    plain = {"type": "error", "code": "VALIDATION_FAILED", "message": "unknown market"}
+    ack = {"type": "subscribed", "channels": ["ticker:BTC/USDT"]}
+    server.script[("subscribe", 0)] = [err, plain, ack]
+    async with make(server) as ws:
+        res = await ws.subscribe("futures.orderbook:NOPE", "ticker:NOPE/USDT", "ticker:BTC/USDT")
+        limited, bare = res.errors["futures.orderbook:NOPE"], res.errors["ticker:NOPE/USDT"]
+        assert (limited.code, limited.channel, limited.retry_after) == ("RATE_LIMITED", "futures.orderbook:NOPE", 60.0)
+        assert limited.details == {"retry_after_seconds": 60}
+        assert (bare.channel, bare.details, bare.retry_after) == (None, {}, None)
+
+
+@pytest.mark.parametrize(
+    "extra,details,retry_after",
+    [
+        ({"details": None}, {}, None),
+        ({"details": "x"}, {}, None),
+        ({"details": [1]}, {}, None),
+        ({"details": {"retry_after_seconds": "60"}}, {"retry_after_seconds": "60"}, None),
+        ({"details": {"retry_after_seconds": -1}}, {"retry_after_seconds": -1}, None),
+        ({"details": {"retry_after_seconds": True}}, {"retry_after_seconds": True}, None),
+        (
+            {"details": {"retry_after_seconds": 1.5, "other": 1}, "unknown": 1},
+            {"retry_after_seconds": 1.5, "other": 1},
+            1.5,
+        ),
+        ({"channel": 5}, {}, None),
+    ],
+)
+def test_error_frame_fields_are_decoded_defensively(
+    extra: Dict[str, Any], details: Dict[str, Any], retry_after: Any
+) -> None:
+    err = cws.WebSocketError.from_frame({"type": "error", "code": "X", "message": "m", **extra}, "m")
+    assert err.details == details and err.retry_after == retry_after and err.channel is None
+
+
+def test_local_websocket_errors_have_empty_frame_fields() -> None:
+    err = cws.WebSocketError("TIMEOUT", "no ack")
+    assert (err.code, err.message, err.channel, err.details, err.retry_after) == ("TIMEOUT", "no ack", None, {}, None)

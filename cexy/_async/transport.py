@@ -133,6 +133,7 @@ class AsyncTransport:
         recover: Optional[Callable[[], Any]] = None,
         on_retry_error: Optional[Callable[[CexyApiError], Any]] = None,
         max_retries: Optional[int] = None,
+        no_retry: Optional[Callable[[CexyApiError], bool]] = None,
         keep_null: bool = False,
         cost: int = 1,
         order_actions: int = 0,
@@ -150,6 +151,8 @@ class AsyncTransport:
         returned instead of raising.
         ``max_retries``: overrides the client's retry count for this call; ``cancel_all``'s
         until_done loop passes 0 and does its own retrying, so every HTTP request is one round.
+        ``no_retry``: called with a retryable error; when it returns True the error is raised at
+        once instead of retried (the futures history helpers handle their busy 503 themselves).
 
         ``keep_null``: send ``None`` values in ``body`` as JSON null instead of dropping them.
 
@@ -291,7 +294,7 @@ class AsyncTransport:
                 recovered = await on_retry_error(err)
                 if recovered is not None:
                     return recovered
-            if attempt >= retries or not self.policy.is_retryable(err):
+            if attempt >= retries or not self.policy.is_retryable(err) or (no_retry is not None and no_retry(err)):
                 raise err
             asked = self.policy.server_wait(err)
             if asked is not None and asked > MAX_SERVER_WAIT_S:

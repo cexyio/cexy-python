@@ -370,15 +370,17 @@ for payment in client.futures.iter_funding():   # every funding payment
   `next_cursor`). Paging rules, which `iter_fills()`/`iter_funding()` follow for you: the first
   request sends no cursor; the cursor is opaque text, sent back exactly as given; a page can be
   short, even empty, and still have a `next_cursor`, so keep going until it is `None`. An
-  empty page whose `next_cursor` equals the cursor just sent means the provider is busy: the
-  iterator waits (the normal retry backoff) and asks for the same cursor again, up to
+  empty page whose `next_cursor` equals the cursor just sent, or a 503 with
+  `details.reason` `futures_data_unavailable` (on any request), means the provider is busy: the
+  iterator waits (the 503's `Retry-After`, else `details.retry_after_seconds`, else the normal
+  retry backoff) and asks for the same cursor again, up to
   `max_busy_retries` times in a row (default 3; independent of the client's `max_retries`), then
-  raises `PagingStalledError` (code `PAGING_STALLED`, a local error, retryable): start again
-  later. A page *with* rows that repeats the cursor just sent is a server fault: its rows are
+  raises `PagingStalledError` (code `PAGING_STALLED`, a local error, retryable; after a busy 503 its
+  `__cause__` is that 503): start again later. A page *with* rows that repeats the cursor just sent is a server fault: its rows are
   yielded, then `PagingCursorRepeatedError` (`PAGING_CURSOR_REPEATED`, not retryable) is raised
   instead of looping. After either error the rows already yielded are not the complete history;
-  both errors carry the cursor in `details["cursor"]`. A retryable error between pages (e.g. 503
-  with `Retry-After`) is retried for the same cursor by the client's normal retry policy, and
+  both errors carry the cursor in `details["cursor"]`. Any other retryable error between pages (e.g. a
+  502, a 429, a 503 without that reason) is retried for the same cursor by the client's normal retry policy, and
   paging continues. Rows are `FuturesFill` and `Funding` models (funding rows have no id).
 - When nothing usable is cached and the provider cannot be read, the server answers 503
   `SERVICE_UNAVAILABLE` with `details["reason"] == "futures_data_unavailable"` and a

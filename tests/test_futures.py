@@ -35,6 +35,7 @@ MARKET = {
     "volume_24h": "123456.7",
     "price_24h_ago": "59000.0",
 }
+BACKOFF = 0.123  # what the test backoff returns, to tell backoff waits from hinted ones
 SIGNED = ("X-API-Key", "X-API-Timestamp", "X-API-Nonce", "X-API-Signature")
 
 
@@ -68,14 +69,22 @@ def check(
     exp = case["expect"]
     assert len(pages.requests) == exp["requests"]
     assert len(sleeps) == exp["sleeps"]
-    if "min_sleep_seconds" in exp:
-        assert all(s >= exp["min_sleep_seconds"] for s in sleeps)
+    if "sleep_seconds" in exp:  # the hinted waits, exact and in order
+        assert [s for s in sleeps if s != BACKOFF] == exp["sleep_seconds"]
+    if "backoff_sleeps" in exp:
+        assert sleeps.count(BACKOFF) == exp["backoff_sleeps"]
     if "error_code" in exp:
         cls = {"PAGING_STALLED": cexy.PagingStalledError, "PAGING_CURSOR_REPEATED": cexy.PagingCursorRepeatedError}
-        assert type(err) is cls[exp["error_code"]] and isinstance(err, cexy.PagingError)
+        if exp["error_code"] in cls:  # a local paging error
+            assert type(err) is cls[exp["error_code"]] and isinstance(err, cexy.PagingError)
+            assert err.details["cursor"] == case["pages"][-1]["request_cursor"]
+        else:  # the server's own error, passed through
+            assert isinstance(err, cexy.CexyApiError) and not isinstance(err, cexy.PagingError)
         assert err.code == exp["error_code"] and err.retryable is exp["error_retryable"]
-        assert err.details["cursor"] == case["pages"][-1]["request_cursor"]
         assert ids == exp["ids_before_error"]
+        if "error_cause_reason" in exp:
+            assert isinstance(err.__cause__, cexy.CexyApiError)
+            assert err.__cause__.details["reason"] == exp["error_cause_reason"]
     else:
         assert err is None
         assert ids == (exp["ids"] if "ids" in exp else exp["times"])
@@ -86,10 +95,16 @@ def check(
         assert "X-API-Secret" not in req.headers
 
 
-def sync_client(sleeps: SleepRecorder) -> cexy.Client:
-    c = cexy.Client(api_key=KEY, api_secret=SECRET)
+def sync_client(sleeps: SleepRecorder, case: Optional[Dict[str, Any]] = None) -> cexy.Client:
+    opts = (case or {}).get("client", {})
+    c = cexy.Client(api_key=KEY, api_secret=SECRET, **opts)
     c._transport._sleep = sleeps
+    c._transport.policy.backoff = lambda attempt: BACKOFF  # type: ignore[method-assign]
     return c
+
+
+def busy_budget(case: Dict[str, Any]) -> int:
+    return case.get("max_busy_retries", PAGING["max_busy_retries"])
 
 
 def test_fixture_max_busy_retries_is_the_default() -> None:
@@ -106,14 +121,16 @@ def test_fixture_max_busy_retries_is_the_default() -> None:
 @pytest.mark.parametrize("rows_key,case", ALL_CASES, ids=ALL_IDS)
 def test_history_paging_conformance_sync(case: Dict[str, Any], rows_key: str) -> None:
     sleeps = SleepRecorder()
-    client = sync_client(sleeps)
+    client = sync_client(sleeps, case)
     pages = Pages(case)
     url = FILLS_URL if rows_key == "fills" else FUNDING_URL
     ids: List[Any] = []
     err: Optional[BaseException] = None
     with respx.mock:
         respx.get(url__startswith=url).mock(side_effect=pages)
-        it = client.futures.iter_fills() if rows_key == "fills" else client.futures.iter_funding()
+        it = (client.futures.iter_fills if rows_key == "fills" else client.futures.iter_funding)(
+            max_busy_retries=busy_budget(case)
+        )
         try:
             for row in it:
                 ids.append(row_key(rows_key, row))
@@ -129,11 +146,14 @@ async def test_history_paging_conformance_async(case: Dict[str, Any], rows_key: 
     url = FILLS_URL if rows_key == "fills" else FUNDING_URL
     ids: List[Any] = []
     err: Optional[BaseException] = None
-    async with cexy.AsyncClient(api_key=KEY, api_secret=SECRET) as client:
+    async with cexy.AsyncClient(api_key=KEY, api_secret=SECRET, **case.get("client", {})) as client:
         client._transport._sleep = sleeps
+        client._transport.policy.backoff = lambda attempt: BACKOFF  # type: ignore[method-assign]
         with respx.mock:
             respx.get(url__startswith=url).mock(side_effect=pages)
-            it = client.futures.iter_fills() if rows_key == "fills" else client.futures.iter_funding()
+            it = (client.futures.iter_fills if rows_key == "fills" else client.futures.iter_funding)(
+                max_busy_retries=busy_budget(case)
+            )
             try:
                 async for row in it:
                     ids.append(row_key(rows_key, row))
