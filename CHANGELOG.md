@@ -5,6 +5,8 @@ request signing (HMAC) ships; see "Versioning" in README.md.
 
 ## Unreleased
 
+## 0.1.0.dev18 (2026-10-17)
+
 ### Changed
 - `cancel_all(..., until_done=True)`: the retry codes are now exactly `SERVICE_UNAVAILABLE`,
   `MARKET_UNAVAILABLE` and `CONCURRENT_MODIFICATION`. `INVALID_STATE` (an order taken off the book
@@ -13,6 +15,7 @@ request signing (HMAC) ships; see "Versioning" in README.md.
   later, which cancels a `pending` order at once; against an older backend a pending order's
   `INVALID_STATE` returns at once. Texts updated for cancel-at-once. Conformance cases renamed
   (`retryable_failures_back_off_then_resolve`, `market_down_until_time_budget`).
+- Built against cexy-api-spec `09c9ae0` (cancel-intent texts, cancel-all loop retry codes).
 
 ## 0.1.0.dev17 (2026-10-15)
 
