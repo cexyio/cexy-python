@@ -5,6 +5,15 @@ request signing (HMAC) ships; see "Versioning" in README.md.
 
 ## Unreleased
 
+### Changed
+- `cancel_all(..., until_done=True)`: the retry codes are now exactly `SERVICE_UNAVAILABLE`,
+  `MARKET_UNAVAILABLE` and `CONCURRENT_MODIFICATION`. `INVALID_STATE` (an order taken off the book
+  that cannot be cancelled yet) is no longer retried; it is returned in `failures`. A market that
+  stays down returns only when the time budget (default 2 minutes) ends. Needs backend 94a2735 or
+  later, which cancels a `pending` order at once; against an older backend a pending order's
+  `INVALID_STATE` returns at once. Texts updated for cancel-at-once. Conformance cases renamed
+  (`retryable_failures_back_off_then_resolve`, `market_down_until_time_budget`).
+
 ## 0.1.0.dev17 (2026-10-15)
 
 ### Added

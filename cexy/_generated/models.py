@@ -148,7 +148,7 @@ class CancelFailureResponse(BaseModel):
     code: Annotated[
         str,
         Field(
-            description="The error code of the attempt, as in any error response: e.g. `INVALID_STATE` for an order still being placed when the wait ran out, or `MARKET_UNAVAILABLE`."
+            description="The error code of the attempt, as in any error response: e.g. `MARKET_UNAVAILABLE` for an order whose market is restarting, or `CONCURRENT_MODIFICATION`."
         ),
     ]
     message: Annotated[str, Field(description="Its message.")]

@@ -1593,7 +1593,7 @@ components:
       title: '`session.revoked`'
       summary: A session on the account was revoked.
       description: 'A session on the account was revoked. `current` says whether it was the one this connection
-        signed in with; if so, `signed_out` follows.
+        is signed in with now (never for an API key); if so, `signed_out` follows.
 
 
         Sequenced: `sequence` rises by one per frame on the channel. A gap means a frame was missed: refetch
@@ -2790,9 +2790,10 @@ components:
       properties:
         current:
           type: boolean
-          description: Whether it is the session this connection signed in with (always, when every session
-            was). When `true` the connection is signed out next. Added by each connection on its way out,
-            so it is never `null` on the wire.
+          description: Whether it is the session this connection is signed in with now (always, when every
+            session was). Never on a connection signed in with an API key, which holds no session. When
+            `true` the connection is signed out next. Added by each connection on its way out, so it is
+            never `null` on the wire.
         reason:
           $ref: '#/components/schemas/SessionRevocation'
         session_id:

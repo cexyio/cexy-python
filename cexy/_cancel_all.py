@@ -5,8 +5,10 @@ cexy-api-spec), which every SDK implements:
 
 - every round is exactly ONE HTTP request: the transport does not retry inside the loop, so
   the loop never sends more than ``max_rounds`` requests;
-- repeat while ``has_more`` is true or any failure code is ``INVALID_STATE`` or
-  ``SERVICE_UNAVAILABLE`` (an order still being placed, or its state unreadable);
+- repeat while ``has_more`` is true or any failure code is ``SERVICE_UNAVAILABLE``,
+  ``MARKET_UNAVAILABLE`` (the market is restarting) or ``CONCURRENT_MODIFICATION`` (one order's
+  write budget is exhausted); ``INVALID_STATE`` (an order taken off the book that cannot be
+  cancelled yet) is returned, not retried;
 - after a round that made no progress (nothing cancelled or already closed), sleep 1, 2, 4, 8,
   then 15 s before the next call; reset after any progress; no sleep after progress;
 - a retryable error (429, a retryable 5xx, a network failure) is a round without progress:
@@ -26,7 +28,7 @@ from typing import Dict, List, Literal, Optional, Tuple
 
 from cexy._generated import models as m
 
-RETRY_CODES = frozenset({"INVALID_STATE", "SERVICE_UNAVAILABLE"})
+RETRY_CODES = frozenset({"SERVICE_UNAVAILABLE", "MARKET_UNAVAILABLE", "CONCURRENT_MODIFICATION"})
 BACKOFF_S: Tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 15.0)
 Stopped = Literal["done", "max_rounds", "time_budget", "error"]
 
