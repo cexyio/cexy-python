@@ -86,8 +86,7 @@ for an asset/network pair, then returns the same address on later calls.
 in every market. It also cancels stop orders that have not triggered yet (`pending_trigger`),
 so nothing fires into the market afterwards. The server allows 30 cancel-all calls per minute per account.
 
-One `cancel_all` call handles at most 500 orders and waits up to 500 ms for orders still being
-placed. The result lists `cancelled`, `already_closed` (orders that closed on their own; not an
+One `cancel_all` call handles at most 500 orders. The server cancels a `pending` order at once. The result lists `cancelled`, `already_closed` (orders that closed on their own; not an
 error) and `failed`, with a reason per order in `failures`; `has_more=True` means call again.
 The server allows 30 calls a minute per account. To keep going until nothing is left, opt in:
 
@@ -98,8 +97,10 @@ res.stopped                                                      # "done", "max_
 res.last_error_code                                              # e.g. "RATE_LIMITED" if the last round failed
 ```
 
-The loop repeats while `has_more` is true or an order is still being placed (`INVALID_STATE`) or
-unreadable (`SERVICE_UNAVAILABLE`), and waits 1, 2, 4, 8, then 15 s after a round without progress.
+The loop repeats while `has_more` is true or a failure code is `SERVICE_UNAVAILABLE`,
+`MARKET_UNAVAILABLE` or `CONCURRENT_MODIFICATION`. `INVALID_STATE` (an order taken off the book
+that cannot be cancelled yet) is returned, not retried. A market that stays down returns only when
+the time budget (default 2 minutes) ends. The loop waits 1, 2, 4, 8, then 15 s after a round without progress.
 Every round is exactly one HTTP request (the transport does not retry inside the loop), so it never
 sends more than `max_rounds` requests. A retryable error (429, 5xx, network) counts as a round
 without progress; after a 429 it waits the server's `Retry-After` exactly. A wait that would reach

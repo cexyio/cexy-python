@@ -129,7 +129,7 @@ def test_default_is_one_call_with_the_typed_response() -> None:
         already_closed=["o2"],
         failed=["o3"],
         has_more=True,
-        failures=[{"order_id": "o3", "code": "INVALID_STATE", "message": "still being placed"}],
+        failures=[{"order_id": "o3", "code": "INVALID_STATE", "message": "not cancellable yet"}],
     )
     route = respx.post(URL).respond(json={"data": body})
     res = sync_client(FakeClock()).trading.cancel_all(symbol="BTC/USDT")
@@ -150,7 +150,7 @@ def test_twenty_rounds_with_progress_never_exceed_twenty_requests() -> None:
 
 @respx.mock
 def test_an_order_that_ends_closed_is_never_also_failed() -> None:
-    pending = {"order_id": "p1", "code": "INVALID_STATE", "message": "still being placed"}
+    pending = {"order_id": "p1", "code": "MARKET_UNAVAILABLE", "message": "market restarting"}
     route = respx.post(URL).mock(
         side_effect=[
             httpx.Response(
@@ -164,6 +164,32 @@ def test_an_order_that_ends_closed_is_never_also_failed() -> None:
     assert res.cancelled == ["p1"] and res.already_closed == ["p2"]
 
 
+@respx.mock
+def test_invalid_state_is_not_retried() -> None:
+    f = {"order_id": "o1", "code": "INVALID_STATE", "message": "not cancellable yet"}
+    route = respx.post(URL).respond(json={"data": done(failed=["o1"], failures=[f])})
+    fc = FakeClock()
+    res = sync_client(fc).trading.cancel_all(symbol=None, until_done=True)
+    assert route.call_count == 1 and fc.sleeps == [] and res.stopped == "done"
+    assert res.failed == ["o1"] and res.failures[0].code == "INVALID_STATE"
+
+
+@respx.mock
+@pytest.mark.parametrize("code", ["MARKET_UNAVAILABLE", "CONCURRENT_MODIFICATION", "SERVICE_UNAVAILABLE"])
+def test_retry_codes_retry_then_resolve(code: str) -> None:
+    f = {"order_id": "o1", "code": code, "message": "x"}
+    route = respx.post(URL).mock(
+        side_effect=[
+            httpx.Response(200, json={"data": done(failed=["o1"], failures=[f])}),
+            httpx.Response(200, json={"data": done(cancelled=["o1"])}),
+        ]
+    )
+    fc = FakeClock()
+    res = sync_client(fc).trading.cancel_all(symbol=None, until_done=True)
+    assert route.call_count == 2 and fc.sleeps == [1.0] and res.stopped == "done"
+    assert res.cancelled == ["o1"] and res.failed == []
+
+
 RATE = {
     "error": {
         "code": "RATE_LIMITED",
@@ -175,7 +201,7 @@ RATE = {
 
 
 def rate_limited_sequence() -> List[httpx.Response]:
-    pending = {"order_id": "p1", "code": "INVALID_STATE", "message": "still being placed"}
+    pending = {"order_id": "p1", "code": "MARKET_UNAVAILABLE", "message": "market restarting"}
     return [
         httpx.Response(200, json={"data": done(failed=["p1"], failures=[pending])}),
         httpx.Response(429, json=RATE, headers={"Retry-After": "119"}),

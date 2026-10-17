@@ -703,14 +703,17 @@ class Trading(_Resource):
         ``symbol=None`` cancels open orders in ALL markets. Repeating the call is harmless (it
         cancels whatever is still open), so it is retried like a read; no Idempotency-Key is sent.
 
-        One call handles at most 500 orders and waits up to 500 ms for orders still being
-        placed. The response lists ``cancelled``, ``already_closed`` (closed on their own: not
+        One call handles at most 500 orders; the server cancels a ``pending`` order at
+        once. The response lists ``cancelled``, ``already_closed`` (closed on their own: not
         an error) and ``failed`` with a reason per order in ``failures``; ``has_more`` means call
         again. An unknown ``symbol`` raises ``NotFoundError``; more than 30 calls a minute per
         account raises ``RateLimitError`` once the transport's retries are used up.
 
         ``until_done=True`` repeats the call until nothing is left to retry: while ``has_more``
-        or while a failure is ``INVALID_STATE`` (still being placed) or ``SERVICE_UNAVAILABLE``.
+        or while a failure is ``SERVICE_UNAVAILABLE``, ``MARKET_UNAVAILABLE`` or
+        ``CONCURRENT_MODIFICATION``. ``INVALID_STATE`` (an order taken off the book that cannot
+        be cancelled yet) is returned, not retried. A market that stays down returns only when
+        the time budget (default 2 minutes) ends.
         Every round is one HTTP request (no transport retries inside the loop), so it never sends
         more than ``max_rounds`` requests. After a round without progress it waits 1, 2, 4, 8,
         then 15 s; a retryable error counts as such a round, except that a 429 waits the server's
